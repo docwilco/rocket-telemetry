@@ -1,0 +1,6 @@
+.vscode
+build
+bin2c
+*.gz
+chart.h
+index_html.h
