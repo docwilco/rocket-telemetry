@@ -1,3 +1,4 @@
+#include <Arduino.h>
 #include <DNSServer.h>              // part of ESP32 arduino core
 #include <WiFi.h>                   // this as well
 #include <ESPAsyncWebServer.h>      // 
@@ -19,6 +20,10 @@ DNSServer dnsServer;
 AsyncWebServer webServer(80);
 
 hw_timer_t * timer = NULL;
+
+void handle_root(AsyncWebServerRequest *request);
+void handle_chartjs(AsyncWebServerRequest *request);
+void handle_not_found(AsyncWebServerRequest *request);
 
 void setup()
 {
