@@ -33,7 +33,8 @@ Adafruit_MPU6050 mpu;
 volatile bool telemetry_running = false;
 volatile bool calibrate = false;
 float zero_pressure = 101325; // standard atmospheric pressure in Pa
-uint64_t event_id;
+uint64_t event_id = 0;
+int loop_counter = 0;
 
 void handle_root(AsyncWebServerRequest *request);
 void handle_chartjs(AsyncWebServerRequest *request);
@@ -44,6 +45,7 @@ void handle_stop(AsyncWebServerRequest *request);
 void handle_calibrate(AsyncWebServerRequest *request);
 void init_sensors();
 void do_telemetry();
+void send_event(const char *message, const char *event);
 
 void setup()
 {
@@ -85,20 +87,54 @@ void setup()
 void loop()
 {
     dnsServer.processNextRequest();
-    if (calibrate) {
+    if (calibrate)
+    {
         zero_pressure = bmp.readPressure();
         calibrate = false;
     }
     if (telemetry_running)
     {
         do_telemetry();
-    } else {
+    }
+    else
+    {
+        if (timer != NULL)
+        {
+            timerEnd(timer);
+            timer = NULL;
+        }
+        send_event(NULL, "idle");
         delay(100);
     }
 }
 
+void send_event(const char *message, const char *event)
+{
+    event_id++;
+    // use remove_if to iterate over the clients and
+    // send the data to all of them, removing the ones
+    // that are disconnected
+    unsigned long send_event_start = micros();
+    clients.erase(
+        std::remove_if(clients.begin(), clients.end(),
+                       [&](AsyncEventSourceClient *client)
+                       {
+                           if (!client->connected())
+                           {
+                               return true;
+                           }
+                           client->send(message, event, event_id);
+                           return false;
+                       }),
+        clients.end());
+}
+
 void do_telemetry()
 {
+    if (timer == NULL)
+    {
+        timer = timerBegin(0, 80, true);
+    }
     unsigned long read_sensor_start = micros();
     sensors_event_t a, g, temp;
     mpu.getEvent(&a, &g, &temp);
@@ -125,26 +161,11 @@ void do_telemetry()
     serializeJson(json, json_string);
     unsigned long make_json_end = micros();
     unsigned long make_json_duration = make_json_end - make_json_start;
-    event_id++;
-    // use remove_if to iterate over the clients and
-    // send the data to all of them, removing the ones
-    // that are disconnected
     unsigned long send_event_start = micros();
-    clients.erase(
-        std::remove_if(clients.begin(), clients.end(),
-                       [&](AsyncEventSourceClient *client)
-                       {
-                           if (!client->connected())
-                           {
-                               return true;
-                           }
-                           client->send(json_string.c_str(), "telemetry", event_id);
-                           return false;
-                       }),
-        clients.end());
+    send_event(json_string.c_str(), "telemetry");
     unsigned long send_event_end = micros();
     unsigned long send_event_duration = send_event_end - send_event_start;
-    //Serial.printf("Read sensor: %lu us, make json: %lu us, send event: %lu us\n", read_sensor_duration, make_json_duration, send_event_duration);
+    // Serial.printf("Read sensor: %lu us, make json: %lu us, send event: %lu us\n", read_sensor_duration, make_json_duration, send_event_duration);
 }
 
 void handle_file(AsyncWebServerRequest *request, const String &content_type, const uint8_t *data, size_t data_length)
@@ -184,8 +205,7 @@ void handle_start(AsyncWebServerRequest *request)
         return;
     }
     Serial.println("Starting telemetry");
-    event_id = 0;
-    timer = timerBegin(0, 80, true);
+    send_event(NULL, "telemetry_started");
     telemetry_running = true;
     request->send(200, "text/plain", "Telemetry started");
 }
@@ -199,6 +219,7 @@ void handle_stop(AsyncWebServerRequest *request)
     }
     Serial.println("Stopping telemetry");
     telemetry_running = false;
+    send_event(NULL, "telemetry_stopped");
     // close all clients
     for (auto client : clients)
     {
