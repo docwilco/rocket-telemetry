@@ -32,11 +32,11 @@ hw_timer_t *timer = NULL;
 Adafruit_BMP085 bmp;
 Adafruit_MPU6050 mpu;
 
-volatile bool telemetry_running = false;
-volatile bool calibrate = false;
+volatile bool telemetry_requested = false;
+volatile bool calibration_requested = false;
 float zero_pressure = 101325;  // standard atmospheric pressure in Pa
 uint64_t event_id = 0;
-int loop_counter = 0;
+uint32_t loop_counter = 0;
 
 void handle_root(AsyncWebServerRequest *request);
 void handle_chartjs(AsyncWebServerRequest *request);
@@ -86,19 +86,32 @@ void setup() {
 }
 
 void loop() {
+    loop_counter++;
     dnsServer.processNextRequest();
-    if (calibrate) {
+    if (calibration_requested) {
+        Serial.println("Calibration requested");
         zero_pressure = bmp.readPressure();
-        calibrate = false;
+        Serial.printf("Zero pressure: %f Pa\n", zero_pressure);
+        calibration_requested = false;
     }
-    if (telemetry_running) {
+    if (telemetry_requested) {
         do_telemetry();
     } else {
+        // we're basically using the timer state to determine if we were
+        // running telemetry or not until now.
         if (timer != NULL) {
+            Serial.println("Stopping timer");
             timerEnd(timer);
             timer = NULL;
+            // sending event here instead of handle_stop because we don't
+            // want any telemetry events after the _stopped event. Which
+            // would happen if we sent the event in handle_stop.
+            send_event(NULL, "telemetry_stopped");
         }
-        send_event(NULL, "idle");
+        // only send idle events every 10 loops
+        if (loop_counter % 10 == 0) {
+            send_event(NULL, "idle");
+        }
         delay(100);
     }
 }
@@ -108,13 +121,23 @@ void send_event(const char *message, const char *event) {
     // use remove_if to iterate over the clients and
     // send the data to all of them, removing the ones
     // that are disconnected
-    unsigned long send_event_start = micros();
+    const char *message_to_send;
+    if (message == NULL) {
+        // Serial.printf("Sending event %s\n", event);
+        message_to_send = "";
+    } else {
+        // Serial.printf("Sending event %s: %s\n", event, message);
+        message_to_send = message;
+    }
     clients.erase(std::remove_if(clients.begin(), clients.end(),
                                  [&](AsyncEventSourceClient *client) {
-                                     if (!client->connected()) {
+                                     if (!client->connected() ||
+                                         client->packetsWaiting() >=
+                                             SSE_MAX_QUEUED_MESSAGES) {
                                          return true;
                                      }
-                                     client->send(message, event, event_id);
+                                     client->send(message_to_send, event,
+                                                  event_id);
                                      return false;
                                  }),
                   clients.end());
@@ -123,6 +146,10 @@ void send_event(const char *message, const char *event) {
 void do_telemetry() {
     if (timer == NULL) {
         timer = timerBegin(0, 80, true);
+        // like the _stopped event, we don't want any idle events
+        // after the _started event. So we send it here instead of
+        // handle_start.
+        send_event(NULL, "telemetry_started");
     }
     unsigned long read_sensor_start = micros();
     sensors_event_t a, g, temp;
@@ -185,33 +212,27 @@ void handle_filesaver(AsyncWebServerRequest *request) {
 }
 
 void handle_start(AsyncWebServerRequest *request) {
-    if (telemetry_running) {
+    if (telemetry_requested) {
         request->send(200, "text/plain", "Telemetry already running");
         return;
     }
     Serial.println("Starting telemetry");
-    send_event(NULL, "telemetry_started");
-    telemetry_running = true;
+    telemetry_requested = true;
     request->send(200, "text/plain", "Telemetry started");
 }
 
 void handle_stop(AsyncWebServerRequest *request) {
-    if (!telemetry_running) {
+    if (!telemetry_requested) {
         request->send(200, "text/plain", "Telemetry already stopped");
         return;
     }
     Serial.println("Stopping telemetry");
-    telemetry_running = false;
-    send_event(NULL, "telemetry_stopped");
-    // close all clients
-    for (auto client : clients) {
-        client->close();
-    }
-    clients.clear();
+    telemetry_requested = false;
     request->send(200, "text/plain", "Telemetry stopped");
 }
 
 void handle_calibrate(AsyncWebServerRequest *request) {
+    calibration_requested = true;
     request->send(200, "text/plain", "Calibration done");
 }
 

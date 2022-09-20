@@ -47,6 +47,10 @@
             background-color: #2196F3;
         }
         
+        #calibrate_button {
+            background-color: #2196F3;
+        }
+        
         .button:disabled {
             background-color: #cccccc !important;
         }
@@ -55,6 +59,7 @@
         var start_time = 0;
         const random = (min, max) => Math.random() * (max - min) + min;
         var event_source;
+        var telemetry_running = false;
 
         function update_chart(chart, dataset_number, time, value) {
             chart.data.datasets[dataset_number].data.push({
@@ -63,8 +68,10 @@
             });
         }
 
-        function start_telemetry() {
+        function telemetry_started() {
+            telemetry_running = true;
             start_time = Date.now();
+            document.getElementById("calibrate_button").disabled = true;
             document.getElementById("start_button").disabled = true;
             document.getElementById("stop_button").disabled = false;
             document.getElementById("save_button").disabled = true;
@@ -74,33 +81,15 @@
                     dataset.data = [];
                 });
             });
-            event_source = new EventSource("/events");
-            event_source.addEventListener("telemetry", (event) => {
-                var data = JSON.parse(event.data);
-                update_chart(graph_accel, 0, data.time, data.acceleration_x);
-                update_chart(graph_accel, 1, data.time, data.acceleration_y);
-                update_chart(graph_accel, 2, data.time, data.acceleration_z);
-                update_chart(graph_gyro, 0, data.time, data.gyro_x);
-                update_chart(graph_gyro, 1, data.time, data.gyro_y);
-                update_chart(graph_gyro, 2, data.time, data.gyro_z);
-                update_chart(graph_pressure, 0, data.time, data.pressure);
-                update_chart(graph_pressure, 1, data.time, data.altitude);
-                update_chart(graph_temperature, 0, data.time, data.bmp_temperature);
-                update_chart(graph_temperature, 1, data.time, data.mpu_temperature);
-                all_charts.forEach((chart) => {
-                    chart.update('none');
-                });
-            });
-            fetch("/start");
         }
 
-        function stop_telemetry() {
+        function telemetry_stopped() {
+            telemetry_running = false;
+            document.getElementById("calibrate_button").disabled = false;
             document.getElementById("start_button").disabled = false;
             document.getElementById("stop_button").disabled = true;
             document.getElementById("save_button").disabled = false;
             document.getElementById("load_button").disabled = false;
-            fetch("/stop");
-            event_source.close();
         }
 
         function save_telemetry() {
@@ -124,8 +113,8 @@
 <body>
     <h1>Live Telemetry</h1>
     <button class="button" id="calibrate_button" onclick="fetch('/calibrate')">Calibrate</button>
-    <button class="button" id="start_button" onclick="start_telemetry()">Start</button>
-    <button class="button" id="stop_button" onclick="stop_telemetry()" disabled>Stop</button>
+    <button class="button" id="start_button" onclick="fetch('/start')">Start</button>
+    <button class="button" id="stop_button" onclick="fetch('/stop')" disabled>Stop</button>
     <button class="button" id="save_button" onclick="save_telemetry()">Save...</button>
     <button class="button" id="load_button" onclick="document.getElementById('file_load').click();">Load...</button>
     <input id="file_load" type="file" style="display: none;" />
@@ -141,7 +130,7 @@
                 graph_pressure.data.datasets = data.pressure;
                 graph_temperature.data.datasets = data.temperature;
                 all_charts.forEach((chart) => {
-                    chart.update('none');
+                    chart.update();
                 });
             };
             reader.readAsText(file);
@@ -324,6 +313,47 @@
             }
         });
         all_charts.push(graph_temperature);
+
+        event_source = new EventSource("/events");
+        event_source.addEventListener("telemetry", (event) => {
+            // telemetry can already be running when we load this page, 
+            // so we need to handle that case.
+            if (!telemetry_running) {
+                telemetry_started();
+            }
+            var data = JSON.parse(event.data);
+            update_chart(graph_accel, 0, data.time, data.acceleration_x);
+            update_chart(graph_accel, 1, data.time, data.acceleration_y);
+            update_chart(graph_accel, 2, data.time, data.acceleration_z);
+            update_chart(graph_gyro, 0, data.time, data.gyro_x);
+            update_chart(graph_gyro, 1, data.time, data.gyro_y);
+            update_chart(graph_gyro, 2, data.time, data.gyro_z);
+            update_chart(graph_pressure, 0, data.time, data.pressure);
+            update_chart(graph_pressure, 1, data.time, data.altitude);
+            update_chart(graph_temperature, 0, data.time, data.bmp_temperature);
+            update_chart(graph_temperature, 1, data.time, data.mpu_temperature);
+            all_charts.forEach((chart) => {
+                chart.update();
+            });
+        });
+        event_source.addEventListener("idle", (event) => {
+            // It's less likely that we think we're running when we're not
+            // but just in case, we check this. 
+            // A panic/crash on the ESP32 would actually cause this state.
+            if (telemetry_running) {
+                telemetry_stopped();
+            }
+        });
+        // since we have the checks in the other event handlers, we don't 
+        // really need these, but it's nice and clean. Guessing it will
+        // also help with branch prediction, even if that's overkill for
+        // this application.
+        event_source.addEventListener("telemetry_started", (event) => {
+            telemetry_started();
+        });
+        event_source.addEventListener("telemetry_stopped", (event) => {
+            telemetry_stopped();
+        });
     </script>
 </body>
 
