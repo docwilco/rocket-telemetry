@@ -80,7 +80,6 @@ void setup()
 
     dnsServer.start(53, "*", local_ip);
     Serial.println("DNS server started");
-    Serial.println("Timer started");
 }
 
 void loop()
@@ -100,11 +99,15 @@ void loop()
 
 void do_telemetry()
 {
+    unsigned long read_sensor_start = micros();
     sensors_event_t a, g, temp;
     mpu.getEvent(&a, &g, &temp);
     float pressure = bmp.readPressure();
     float altitude = bmp.readAltitude(zero_pressure);
     float temperature = bmp.readTemperature();
+    unsigned long read_sensor_end = micros();
+    unsigned long read_sensor_duration = read_sensor_end - read_sensor_start;
+    unsigned long make_json_start = micros();
     const int capacity = JSON_OBJECT_SIZE(11);
     StaticJsonDocument<capacity> json;
     json["time"] = timerReadMilis(timer);
@@ -120,11 +123,13 @@ void do_telemetry()
     json["mpu_temperature"] = temp.temperature;
     String json_string = "";
     serializeJson(json, json_string);
-    Serial.println(json_string);
+    unsigned long make_json_end = micros();
+    unsigned long make_json_duration = make_json_end - make_json_start;
     event_id++;
     // use remove_if to iterate over the clients and
     // send the data to all of them, removing the ones
     // that are disconnected
+    unsigned long send_event_start = micros();
     clients.erase(
         std::remove_if(clients.begin(), clients.end(),
                        [&](AsyncEventSourceClient *client)
@@ -137,6 +142,9 @@ void do_telemetry()
                            return false;
                        }),
         clients.end());
+    unsigned long send_event_end = micros();
+    unsigned long send_event_duration = send_event_end - send_event_start;
+    //Serial.printf("Read sensor: %lu us, make json: %lu us, send event: %lu us\n", read_sensor_duration, make_json_duration, send_event_duration);
 }
 
 void handle_file(AsyncWebServerRequest *request, const String &content_type, const uint8_t *data, size_t data_length)
