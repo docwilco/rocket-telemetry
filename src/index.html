@@ -4,83 +4,326 @@
 <head>
     <title>Live Telemetry</title>
     <script src="chart-v3.9.1.min.js"></script>
+    <script src="FileSaver-v2.0.5.min.js"></script>
+    <style>
+        html {
+            font-family: Helvetica;
+            display: inline-block;
+            margin: 0px auto;
+            text-align: center;
+        }
+        
+        .h1 {
+            text-align: left;
+        }
+        
+        .button {
+            border: none;
+            color: white;
+            padding: 16px 40px;
+            text-decoration: none;
+            font-size: 30px;
+            margin: 2px;
+            cursor: pointer;
+        }
+        
+        .button:disabled {
+            color: #666666;
+        }
+        
+        #start_button {
+            background-color: #4CAF50;
+        }
+        
+        #stop_button {
+            background-color: #f44336;
+        }
+        
+        #save_button {
+            background-color: #2196F3;
+        }
+        
+        #load_button {
+            background-color: #2196F3;
+        }
+        
+        .button:disabled {
+            background-color: #cccccc !important;
+        }
+    </style>
+    <script>
+        var start_time = 0;
+        const random = (min, max) => Math.random() * (max - min) + min;
+        var event_source;
+
+        function update_chart(chart, dataset_number, time, value) {
+            chart.data.datasets[dataset_number].data.push({
+                x: time,
+                y: value
+            });
+        }
+
+        function start_telemetry() {
+            start_time = Date.now();
+            document.getElementById("start_button").disabled = true;
+            document.getElementById("stop_button").disabled = false;
+            document.getElementById("save_button").disabled = true;
+            document.getElementById("load_button").disabled = true;
+            all_charts.forEach((chart) => {
+                chart.data.datasets.forEach((dataset) => {
+                    dataset.data = [];
+                });
+            });
+            event_source = new EventSource("/events");
+            event_source.addEventListener("telemetry", (event) => {
+                var data = JSON.parse(event.data);
+                update_chart(graph_accel, 0, data.time, data.acceleration_x);
+                update_chart(graph_accel, 1, data.time, data.acceleration_y);
+                update_chart(graph_accel, 2, data.time, data.acceleration_z);
+                update_chart(graph_gyro, 0, data.time, data.gyro_x);
+                update_chart(graph_gyro, 1, data.time, data.gyro_y);
+                update_chart(graph_gyro, 2, data.time, data.gyro_z);
+                update_chart(graph_pressure, 0, data.time, data.pressure);
+                update_chart(graph_pressure, 1, data.time, data.altitude);
+                update_chart(graph_temperature, 0, data.time, data.bmp_temperature);
+                update_chart(graph_temperature, 1, data.time, data.mpu_temperature);
+                all_charts.forEach((chart) => {
+                    chart.update('none');
+                });
+            });
+            fetch("/start");
+        }
+
+        function stop_telemetry() {
+            document.getElementById("start_button").disabled = false;
+            document.getElementById("stop_button").disabled = true;
+            document.getElementById("save_button").disabled = false;
+            document.getElementById("load_button").disabled = false;
+            fetch("/stop");
+            event_source.close();
+        }
+
+        function save_telemetry() {
+            var data = {
+                start_time: start_time,
+                accel: graph_accel.data.datasets,
+                gyro: graph_gyro.data.datasets,
+                pressure: graph_pressure.data.datasets,
+                temperature: graph_temperature.data.datasets
+            }
+            var blob = new Blob([JSON.stringify(data)], {
+                type: "application/json;charset=utf-8"
+            });
+            saveAs(blob, `telemetry_${start_time}.json`);
+        }
+    </script>
+</head>
+
 </head>
 
 <body>
     <h1>Live Telemetry</h1>
-    <canvas id="graph1" width="400" height="100"></canvas>
-    <canvas id="graph2" width="400" height="100"></canvas>
+    <button class="button" id="calibrate_button" onclick="fetch('/calibrate')">Calibrate</button>
+    <button class="button" id="start_button" onclick="start_telemetry()">Start</button>
+    <button class="button" id="stop_button" onclick="stop_telemetry()" disabled>Stop</button>
+    <button class="button" id="save_button" onclick="save_telemetry()">Save...</button>
+    <button class="button" id="load_button" onclick="document.getElementById('file_load').click();">Load...</button>
+    <input id="file_load" type="file" style="display: none;" />
     <script>
-        const ctx1 = document.getElementById('graph1');
-        const myChart1 = new Chart(ctx1, {
-            type: 'bar',
-            data: {
-                labels: ['Red', 'Blue', 'Yellow', 'Green', 'Purple', 'Orange'],
-                datasets: [{
-                    label: '# of Votes',
-                    data: [12, 19, 3, 5, 2, 3],
-                    backgroundColor: [
-                        'rgba(255, 99, 132, 0.2)',
-                        'rgba(54, 162, 235, 0.2)',
-                        'rgba(255, 206, 86, 0.2)',
-                        'rgba(75, 192, 192, 0.2)',
-                        'rgba(153, 102, 255, 0.2)',
-                        'rgba(255, 159, 64, 0.2)'
-                    ],
-                    borderColor: [
-                        'rgba(255, 99, 132, 1)',
-                        'rgba(54, 162, 235, 1)',
-                        'rgba(255, 206, 86, 1)',
-                        'rgba(75, 192, 192, 1)',
-                        'rgba(153, 102, 255, 1)',
-                        'rgba(255, 159, 64, 1)'
-                    ],
-                    borderWidth: 1
-                }]
-            },
-            options: {
-                scales: {
-                    y: {
-                        beginAtZero: true
-                    }
-                }
-            }
+        document.getElementById("file_load").addEventListener("change", (event) => {
+            var file = event.target.files[0];
+            var reader = new FileReader();
+            reader.onload = (event) => {
+                var data = JSON.parse(event.target.result);
+                start_time = data.start_time;
+                graph_accel.data.datasets = data.accel;
+                graph_gyro.data.datasets = data.gyro;
+                graph_pressure.data.datasets = data.pressure;
+                graph_temperature.data.datasets = data.temperature;
+                all_charts.forEach((chart) => {
+                    chart.update('none');
+                });
+            };
+            reader.readAsText(file);
         });
-        const ctx2 = document.getElementById('graph2');
-        const myChart2 = new Chart(ctx2, {
+    </script>
+    <canvas id="graph_accel" width="400" height="300"></canvas>
+    <canvas id="graph_gyro" width="400" height="300"></canvas>
+    <canvas id="graph_pressure" width="400" height="300"></canvas>
+    <canvas id="graph_temperature" width="400" height="300"></canvas>
+    <script>
+        // from https://personal.sron.nl/~pault/#fig:scheme_bright
+        const bright_qualitative_colors = [
+            '#4477AA', '#EE6677', '#228833', '#CCBB44', '#66CCEE', '#AA3377', '#BBBBBB'
+        ];
+        const all_charts = [];
+        const graph_accel = new Chart(document.getElementById('graph_accel'), {
             type: 'line',
             data: {
-                labels: ['Red', 'Blue', 'Yellow', 'Green', 'Purple', 'Orange'],
                 datasets: [{
-                    label: '# of Votes',
-                    data: [12, 19, 3, 5, 2, 3],
-                    backgroundColor: [
-                        'rgba(255, 99, 132, 0.2)',
-                        'rgba(54, 162, 235, 0.2)',
-                        'rgba(255, 206, 86, 0.2)',
-                        'rgba(75, 192, 192, 0.2)',
-                        'rgba(153, 102, 255, 0.2)',
-                        'rgba(255, 159, 64, 0.2)'
-                    ],
-                    borderColor: [
-                        'rgba(255, 99, 132, 1)',
-                        'rgba(54, 162, 235, 1)',
-                        'rgba(255, 206, 86, 1)',
-                        'rgba(75, 192, 192, 1)',
-                        'rgba(153, 102, 255, 1)',
-                        'rgba(255, 159, 64, 1)'
-                    ],
-                    borderWidth: 1
+                    data: [],
+                    label: 'X',
+                    pointRadius: 0,
+                    borderColor: bright_qualitative_colors[0],
+                    backgroundColor: bright_qualitative_colors[0],
+                }, {
+                    data: [],
+                    label: 'Y',
+                    pointRadius: 0,
+                    borderColor: bright_qualitative_colors[1],
+                    backgroundColor: bright_qualitative_colors[1],
+                }, {
+                    data: [],
+                    label: 'Z',
+                    pointRadius: 0,
+                    borderColor: bright_qualitative_colors[2],
+                    backgroundColor: bright_qualitative_colors[2],
                 }]
             },
             options: {
+                animation: false,
+                plugins: {
+                    title: {
+                        display: true,
+                        text: 'Acceleration'
+                    }
+                },
                 scales: {
-                    y: {
-                        beginAtZero: true
+                    x: {
+                        type: "linear",
+                        parsing: false,
+                        display: true,
                     }
                 }
             }
         });
+        all_charts.push(graph_accel);
+        const graph_gyro = new Chart(document.getElementById('graph_gyro'), {
+            type: 'line',
+            data: {
+                datasets: [{
+                    data: [],
+                    label: 'X',
+                    pointRadius: 0,
+                    borderColor: bright_qualitative_colors[0],
+                    backgroundColor: bright_qualitative_colors[0],
+                }, {
+                    data: [],
+                    label: 'Y',
+                    pointRadius: 0,
+                    borderColor: bright_qualitative_colors[1],
+                    backgroundColor: bright_qualitative_colors[1],
+                }, {
+                    data: [],
+                    label: 'Z',
+                    pointRadius: 0,
+                    borderColor: bright_qualitative_colors[2],
+                    backgroundColor: bright_qualitative_colors[2],
+                }]
+            },
+            options: {
+                animation: false,
+                plugins: {
+                    title: {
+                        display: true,
+                        text: 'Gyroscope'
+                    }
+                },
+                scales: {
+                    x: {
+                        type: "linear",
+                        parsing: false,
+                        display: true,
+                    }
+                }
+            }
+        });
+        all_charts.push(graph_gyro);
+        const graph_pressure = new Chart(document.getElementById('graph_pressure'), {
+            type: 'line',
+            data: {
+                datasets: [{
+                    data: [],
+                    label: 'Pressure',
+                    pointRadius: 0,
+                    borderColor: bright_qualitative_colors[3],
+                    backgroundColor: bright_qualitative_colors[3],
+                }, {
+                    data: [],
+                    label: 'Altitude',
+                    pointRadius: 0,
+                    borderColor: bright_qualitative_colors[4],
+                    backgroundColor: bright_qualitative_colors[4],
+                }]
+            },
+            options: {
+                animation: false,
+                plugins: {
+                    title: {
+                        display: true,
+                        text: 'Air Pressure'
+                    }
+                },
+                scales: {
+                    x: {
+                        type: "linear",
+                        parsing: false,
+                        display: true,
+                    },
+                    y: {
+                        type: "linear",
+                        parsing: false,
+                        display: true,
+                        position: "left"
+                    },
+                    y1: {
+                        type: "linear",
+                        parsing: false,
+                        display: true,
+                        position: "right",
+                        grid: {
+                            drawOnChartArea: false // only want the grid lines for one axis to show up
+                        }
+                    }
+                }
+            }
+        });
+        all_charts.push(graph_pressure);
+        const graph_temperature = new Chart(document.getElementById('graph_temperature'), {
+            type: 'line',
+            data: {
+                datasets: [{
+                    data: [],
+                    label: 'BMP',
+                    pointRadius: 0,
+                    borderColor: bright_qualitative_colors[5],
+                    backgroundColor: bright_qualitative_colors[5],
+                }, {
+                    data: [],
+                    label: 'MPU',
+                    pointRadius: 0,
+                    borderColor: bright_qualitative_colors[6],
+                    backgroundColor: bright_qualitative_colors[6],
+                }]
+            },
+            options: {
+                animation: false,
+                plugins: {
+                    title: {
+                        display: true,
+                        text: 'Temperature'
+                    }
+                },
+                scales: {
+                    x: {
+                        type: "linear",
+                        parsing: false,
+                        display: true,
+                    }
+                }
+            }
+        });
+        all_charts.push(graph_temperature);
     </script>
 </body>
 
