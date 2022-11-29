@@ -4,5 +4,6 @@
 .vscode/launch.json
 .vscode/ipch
 src/*js.h
+src/*bmp.h
 src/index_html.h
 __pycache__/

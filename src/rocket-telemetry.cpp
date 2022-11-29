@@ -4,7 +4,9 @@
 #include <ArduinoJson.h>
 #include <DNSServer.h>          // part of ESP32 arduino core
 #include <ESPAsyncWebServer.h>  //
+#include <EasyButton.h>
 #include <RingBuf.h>
+#include <TFT_eSPI.h>
 #include <WiFi.h>  // this as well
 #include <esp_wifi.h>
 
@@ -13,6 +15,7 @@
 #include "FileSaver_v2_0_5_min_js.h"
 #include "chart_v3_9_1_min_js.h"
 #include "index_html.h"
+#include "nyancat_bmp.h"
 
 // Change these to your desired flavors
 const char *ssid = "Telemetry";     // Enter SSID here
@@ -23,6 +26,16 @@ IPAddress local_ip(10, 233, 239, 1);
 IPAddress gateway(10, 233, 239, 1);
 IPAddress subnet(255, 255, 255, 0);
 
+#define ADC_EN 14  // ADC_EN is the ADC detection enable port
+#define ADC_PIN 34
+#define BUTTON_1 35
+#define BUTTON_2 0
+#define BACKLIGHT_PIN 4
+#define SCREEN_WIDTH 240
+#define SCREEN_HEIGHT 135
+#define BUTTON_WIDTH 80
+#define BUTTON_HEIGHT 40
+
 DNSServer dnsServer;
 AsyncWebServer webServer(80);
 AsyncEventSource events("/events");
@@ -31,12 +44,24 @@ std::vector<AsyncEventSourceClient *> clients;
 hw_timer_t *timer = NULL;
 Adafruit_BMP085 bmp;
 Adafruit_MPU6050 mpu;
+TFT_eSPI tft = TFT_eSPI();
+EasyButton button1(BUTTON_1);
+EasyButton button2(BUTTON_2);
 
 volatile bool telemetry_requested = false;
+bool telemetry_running = false;
 volatile bool calibration_requested = false;
 float zero_pressure = 101325;  // standard atmospheric pressure in Pa
+float max_altitude = NAN;
+float prev_max_altitude = NAN;
+float max_z_accel = NAN;
+float prev_max_z_accel = NAN;
+float prev_battery_voltage = NAN;
+float prev_temperature = NAN;
 uint64_t event_id = 0;
 uint32_t loop_counter = 0;
+volatile bool backlight_on = true;  // it is on by default
+bool backlight_requested = true;
 
 void handle_root(AsyncWebServerRequest *request);
 void handle_chartjs(AsyncWebServerRequest *request);
@@ -47,10 +72,50 @@ void handle_stop(AsyncWebServerRequest *request);
 void handle_calibrate(AsyncWebServerRequest *request);
 void init_sensors();
 void do_telemetry();
+void do_idle();
 void send_event(const char *message, const char *event);
+void draw_grid();
+void draw_button_labels();
+void draw_telemetry();
+float calc_battery_voltage();
+
+void button1_ISR() { button1.read(); }
+void button2_ISR() { button2.read(); }
 
 void setup() {
     Serial.begin(115200);
+
+    button1.begin();
+    button2.begin();
+    if (!button1.supportsInterrupt()) {
+        Serial.println("Button 1 does not support interrupts");
+        while (true) {
+        }
+    }
+    if (!button2.supportsInterrupt()) {
+        Serial.println("Button 2 does not support interrupts");
+        while (true) {
+        }
+    }
+    button1.enableInterrupt(button1_ISR);
+    button2.enableInterrupt(button2_ISR);
+    button1.onPressed([]() {
+        Serial.println("Button 1 pressed");
+        calibration_requested = true;
+        telemetry_requested = !telemetry_requested;
+    });
+    button2.onPressed([]() {
+        Serial.println("Button 2 pressed");
+        backlight_requested = !backlight_requested;
+    });
+    tft.begin();
+    tft.setRotation(1);
+    tft.fillScreen(TFT_BLACK);
+    tft.setTextColor(TFT_WHITE);
+    tft.setTextSize(1);
+    tft.setCursor(0, 0);
+    draw_grid();
+    draw_button_labels();
 
     init_sensors();
 
@@ -88,6 +153,16 @@ void setup() {
 void loop() {
     loop_counter++;
     dnsServer.processNextRequest();
+
+    // flip backlight if needed.
+    // don't do anything until after a few seconds, to
+    // allow the backlight button label to be seen, since
+    // the default is to turn the backlight off.
+    if (loop_counter > 20 && backlight_on != backlight_requested) {
+        digitalWrite(BACKLIGHT_PIN, backlight_requested ? HIGH : LOW);
+        backlight_on = backlight_requested;
+    }
+
     if (calibration_requested) {
         Serial.println("Calibration requested");
         zero_pressure = bmp.readPressure();
@@ -97,22 +172,7 @@ void loop() {
     if (telemetry_requested) {
         do_telemetry();
     } else {
-        // we're basically using the timer state to determine if we were
-        // running telemetry or not until now.
-        if (timer != NULL) {
-            Serial.println("Stopping timer");
-            timerEnd(timer);
-            timer = NULL;
-            // sending event here instead of handle_stop because we don't
-            // want any telemetry events after the _stopped event. Which
-            // would happen if we sent the event in handle_stop.
-            send_event(NULL, "telemetry_stopped");
-        }
-        // only send idle events every 10 loops
-        if (loop_counter % 10 == 0) {
-            send_event(NULL, "idle");
-        }
-        delay(100);
+        do_idle();
     }
 }
 
@@ -144,12 +204,25 @@ void send_event(const char *message, const char *event) {
 }
 
 void do_telemetry() {
-    if (timer == NULL) {
+    if (!telemetry_running) {
+        Serial.println("Starting telemetry");
+        telemetry_running = true;
+        assert(timer == NULL);
         timer = timerBegin(0, 80, true);
         // like the _stopped event, we don't want any idle events
         // after the _started event. So we send it here instead of
         // handle_start.
         send_event(NULL, "telemetry_started");
+        int rotation = tft.getRotation();
+        tft.setRotation(7);
+        tft.pushImage(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, nyancat_bmp);
+        delay(2000);
+        tft.setRotation(rotation);
+        tft.fillScreen(TFT_BLACK);
+        max_altitude = NAN;
+        max_z_accel = NAN;
+        prev_max_altitude = NAN;
+        prev_max_z_accel = NAN;
     }
     unsigned long read_sensor_start = micros();
     sensors_event_t a, g, temp;
@@ -183,6 +256,145 @@ void do_telemetry() {
     unsigned long send_event_duration = send_event_end - send_event_start;
     // Serial.printf("Read sensor: %lu us, make json: %lu us, send event: %lu
     // us\n", read_sensor_duration, make_json_duration, send_event_duration);
+
+    // update max_altitude if higher or if max is NAN
+    if (isnan(max_altitude) || altitude > max_altitude) {
+        max_altitude = altitude;
+    }
+    // update max_z_accel if higher or if max is NAN
+    if (isnan(max_z_accel) || a.acceleration.z > max_z_accel) {
+        max_z_accel = a.acceleration.z;
+    }
+
+    if (max_altitude != prev_max_altitude || max_z_accel != prev_max_z_accel) {
+        static char buf[100] = "";
+        static char prev_buf[100] = "";
+        // format the string to display
+        sprintf(buf, "Max altitude:\n%.2f m\n\nMax z accel:\n%.2f m/s^2",
+                max_altitude, max_z_accel);
+        if (strcmp(buf, prev_buf) != 0) {
+            // only update the screen if the string has changed
+            tft.fillScreen(TFT_BLACK);
+            tft.setCursor(0, 0);
+            tft.setTextColor(TFT_WHITE, TFT_BLACK);
+            tft.setTextSize(3);
+            tft.println(buf);
+            strcpy(prev_buf, buf);
+        }
+    }
+}
+
+void do_idle() {
+    static char buf[100] = "";
+    static char prev_buf[100] = "";
+    if (telemetry_running) {
+        telemetry_running = false;
+        assert(timer != NULL);
+        Serial.println("Stopping telemetry");
+        timerEnd(timer);
+        timer = NULL;
+        // sending event here instead of handle_stop because we don't
+        // want any telemetry events after the _stopped event. Which
+        // would happen if we sent the event in handle_stop.
+        send_event(NULL, "telemetry_stopped");
+        tft.fillScreen(TFT_BLACK);
+        prev_temperature = NAN;
+        prev_battery_voltage = NAN;
+        prev_buf[0] = '\0';
+    }
+    // only send idle events or do display updates every 10 loops
+    if (loop_counter % 10 == 0) {
+        send_event(NULL, "idle");
+        // update the temperature and battery readings if they have changed
+        float temperature = bmp.readTemperature();
+        float battery_voltage = calc_battery_voltage();
+        if (temperature != prev_temperature ||
+            battery_voltage != prev_battery_voltage) {
+            // format the string to display
+            sprintf(buf, "Temp:\n%.1f C\n\nBattery:\n%.2f V",
+                    temperature, battery_voltage);
+            if (strcmp(buf, prev_buf) != 0) {
+                // only update the screen if the string has changed
+                tft.fillScreen(TFT_BLACK);
+                tft.setCursor(0, 0);
+                tft.setTextColor(TFT_WHITE, TFT_BLACK);
+                tft.setTextSize(3);
+                tft.println(buf);
+                tft.setTextSize(2);
+                tft.setCursor(76, 19);
+                tft.println("o");
+                strcpy(prev_buf, buf);
+                draw_button_labels();
+            }
+        }
+    }
+    delay(100);
+}
+
+void draw_button_labels() {
+    // white boxes in top and bottom right corners
+    tft.fillRect(SCREEN_WIDTH - BUTTON_WIDTH, 0, BUTTON_WIDTH, BUTTON_HEIGHT,
+                 TFT_WHITE);
+    tft.fillRect(SCREEN_WIDTH - BUTTON_WIDTH, SCREEN_HEIGHT - BUTTON_HEIGHT,
+                 BUTTON_WIDTH, BUTTON_HEIGHT, TFT_WHITE);
+
+    // Use Middle Center datum to draw text in middle of box
+    tft.setTextColor(TFT_BLACK, TFT_WHITE);
+    tft.setTextSize(2);
+    tft.setTextDatum(MC_DATUM);
+    tft.drawString(telemetry_running ? "Stop" : "Start",
+                   SCREEN_WIDTH - BUTTON_WIDTH / 2, BUTTON_HEIGHT / 2);
+    tft.drawString("Screen", SCREEN_WIDTH - BUTTON_WIDTH / 2,
+                   SCREEN_HEIGHT - BUTTON_HEIGHT / 2);
+}
+
+void draw_grid() {
+#define GRID_STEP 8
+#define MINOR_GRID tft.color565(150, 150, 150)
+#define MAJOR_GRID tft.color565(180, 180, 180)
+#define GRID_EDGE tft.color565(255, 0, 0)
+#define V_CENTER tft.color565(255, 0, 0)
+#define H_CENTER tft.color565(255, 0, 0)
+
+    // draw minor lines first so that the major lines overlap them on the
+    // cross-sections
+    for (int v = (GRID_STEP / 2) - 1; v < SCREEN_WIDTH; v += GRID_STEP) {
+        // minor
+        tft.drawFastVLine(v, 0, SCREEN_HEIGHT, MINOR_GRID);
+    }
+    for (int h = (GRID_STEP / 2) - 1; h < SCREEN_HEIGHT; h += GRID_STEP) {
+        // minor
+        tft.drawFastHLine(0, h, SCREEN_WIDTH, MINOR_GRID);
+    }
+
+    // next major lines, overlapping the minor lines at cross-sections
+    for (int v = GRID_STEP - 1; v < SCREEN_WIDTH; v += GRID_STEP) {
+        // main
+        tft.drawFastVLine(v, 0, SCREEN_HEIGHT, MAJOR_GRID);
+    }
+    for (int h = GRID_STEP - 1; h < SCREEN_HEIGHT; h += GRID_STEP) {
+        // main:
+        tft.drawFastHLine(0, h, SCREEN_WIDTH, MAJOR_GRID);
+    }
+    // edge lines
+    // tft.drawFastVLine(0, 0, SCREEN_HEIGHT - 1, GRID_EDGE);
+    // tft.drawFastVLine(SCREEN_WIDTH - 1, 0, SCREEN_HEIGHT - 1, GRID_EDGE);
+    // tft.drawFastHLine(0, 0, SCREEN_WIDTH - 1, GRID_EDGE);
+    // tft.drawFastHLine(0, SCREEN_HEIGHT - 1, SCREEN_HEIGHT - 1, GRID_EDGE);
+    // center lines
+    tft.drawFastVLine(SCREEN_WIDTH / 2 - 1, 0, SCREEN_HEIGHT - 1, V_CENTER);
+    tft.drawFastHLine(0, SCREEN_HEIGHT / 2 - 1, SCREEN_WIDTH - 1, V_CENTER);
+}
+
+float calc_battery_voltage() {
+    // uint16_t v = analogRead(ADC_PIN);
+    // int vref = 1100;
+    // float ret = ((float)v / 4095.0) * 2.0 * 3.3 * (vref / 1000.0);
+
+    // The above is the way the demo software at
+    // https://github.com/Xinyuan-LilyGO/TTGO-T-Display/blob/master/TFT_eSPI/examples/FactoryTest/FactoryTest.ino
+    // does it. We can simplify that to:
+    return analogRead(ADC_PIN) * 0.00177289377;
 }
 
 void handle_file(AsyncWebServerRequest *request, const String &content_type,

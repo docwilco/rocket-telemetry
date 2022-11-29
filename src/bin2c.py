@@ -20,7 +20,7 @@ import sys
 PY3 = sys.version_info[0] == 3
 
 
-def bin2c(filename, varname='data', linesize=80, indent=4, gzip=False):
+def bin2c(filename, varname='data', linesize=80, indent=4, gzip=False, uint16=False):
     """ Read binary data from file and return as a C array
 
     :param filename: a filename of a file to read.
@@ -36,20 +36,36 @@ def bin2c(filename, varname='data', linesize=80, indent=4, gzip=False):
         return
     with open(filename, 'rb') as in_file:
         data = in_file.read()
+    if uint16 and len(data) % 2 != 0:
+        raise ValueError('Data length must be even')
     if gzip:
         import gzip
         data = gzip.compress(data)
     # limit the line length
     if linesize < 40:
         linesize = 40
-    byte_len = 6  # '0x00, '
-    out = 'const uint8_t %s[%d] = {\n' % (varname, len(data))
+    if uint16:
+        byte_len = 8  # '0x0000, '
+        length = len(data) // 2
+        out = 'const uint16_t %s[%d] = {\n' % (varname, length)
+    else:
+        byte_len = 6  # '0x00, '
+        length = len(data)
+        out = 'const uint8_t %s[%d] = {\n' % (varname, length)
     line = ''
+    odd = True
     for byte in data:
-        line += '0x%02x, ' % (byte if PY3 else ord(byte))
-        if len(line) + indent + byte_len >= linesize:
+        if not uint16:
+            line += '0x%02x, ' % (byte if PY3 else ord(byte))
+        else:
+            if odd:
+                line += '0x%02x' % (byte if PY3 else ord(byte))
+            else:
+                line += '%02x, ' % (byte if PY3 else ord(byte))
+        if (not uint16 or not odd) and len(line) + indent + byte_len >= linesize:
             out += ' ' * indent + line + '\n'
             line = ''
+        odd = not odd
     # add the last line
     if len(line) + indent + byte_len < linesize:
         out += ' ' * indent + line + '\n'
@@ -57,7 +73,7 @@ def bin2c(filename, varname='data', linesize=80, indent=4, gzip=False):
     out = out.rstrip(', \n') + '\n'
     out += '};\n\n'
     # add a length variable
-    out += 'const size_t %s_length = %d;\n' % (varname, len(data))
+    out += 'const size_t %s_length = %d;\n' % (varname, length)
     return out
 
 

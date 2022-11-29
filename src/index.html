@@ -56,6 +56,7 @@
         }
     </style>
     <script>
+        var run_number = 0;
         var start_time = 0;
         const random = (min, max) => Math.random() * (max - min) + min;
         var event_source;
@@ -94,6 +95,9 @@
 
         function save_telemetry() {
             var data = {
+                empty_weight: document.getElementById("empty_weight").value,
+                water_weight: document.getElementById("water_weight").value,
+                air_pressure: document.getElementById("air_pressure").value,
                 start_time: start_time,
                 accel: graph_accel.data.datasets,
                 gyro: graph_gyro.data.datasets,
@@ -117,13 +121,24 @@
     <button class="button" id="stop_button" onclick="fetch('/stop')" disabled>Stop</button>
     <button class="button" id="save_button" onclick="save_telemetry()">Save...</button>
     <button class="button" id="load_button" onclick="document.getElementById('file_load').click();">Load...</button>
+
     <input id="file_load" type="file" style="display: none;" />
+    <br>
+    <label for="empty_weight">Empty Weight (g):</label>
+    <input type="text" id="empty_weight" placeholder="Empty Weight (g)" />
+    <label for="water_weight">Water Weight (g):</label>
+    <input type="text" id="water_weight" placeholder="Water Weight (g)" />
+    <label for="air_pressure">Air Pressure (bar):</label>
+    <input type="text" id="air_pressure" placeholder="Air Pressure (bar)" />
     <script>
         document.getElementById("file_load").addEventListener("change", (event) => {
             var file = event.target.files[0];
             var reader = new FileReader();
             reader.onload = (event) => {
                 var data = JSON.parse(event.target.result);
+                document.getElementById("empty_weight").value = data.empty_weight;
+                document.getElementById("water_weight").value = data.water_weight;
+                document.getElementById("air_pressure").value = data.air_pressure;
                 start_time = data.start_time;
                 graph_accel.data.datasets = data.accel;
                 graph_gyro.data.datasets = data.gyro;
@@ -136,9 +151,9 @@
             reader.readAsText(file);
         });
     </script>
+    <canvas id="graph_pressure" width="400" height="300"></canvas>
     <canvas id="graph_accel" width="400" height="300"></canvas>
     <canvas id="graph_gyro" width="400" height="300"></canvas>
-    <canvas id="graph_pressure" width="400" height="300"></canvas>
     <canvas id="graph_temperature" width="400" height="300"></canvas>
     <script>
         // from https://personal.sron.nl/~pault/#fig:scheme_bright
