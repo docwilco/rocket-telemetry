@@ -9,6 +9,8 @@
     :copyright: (c) 2016 by Dmitry Alimov.
     :license: The MIT License (MIT), see LICENSE for more details.
 
+    Taken from https://github.com/delimitry/bin2c
+
     Minor changes made to the original code by DocWilco <github@drwil.co>
 """
 
@@ -82,6 +84,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('-z', '--gzip', action='store_true',
         help='Compress the input with gzip before converting')
+    parser.add_argument('--uint16', action='store_true',
+        help='Store data as uint16_t instead of uint8_t')
     parser.add_argument(
         'filename', help='filename to convert to C array')
     parser.add_argument(
@@ -92,7 +96,7 @@ def main():
         'indent', nargs='?', help='indent size', default=4, type=int)
     args = parser.parse_args()
     # print out the data
-    print(bin2c(args.filename, args.varname, args.linesize, args.indent, args.gzip))
+    print(bin2c(args.filename, args.varname, args.linesize, args.indent, gzip=args.gzip, uint16=args.uint16))
 
 
 if __name__ == '__main__':
