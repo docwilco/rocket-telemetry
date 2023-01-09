@@ -2,8 +2,12 @@
 #include <Adafruit_MPU6050.h>
 #include <Arduino.h>
 #include <ArduinoJson.h>
-#include <DNSServer.h>          // part of ESP32 arduino core
-#include <ESPAsyncWebServer.h>  //
+#include <DNSServer.h>  // part of ESP32 arduino core
+// This previously said "Because we're already keeping a buffer, fail quick in
+// the webserver side of things." but the lower this is, the less quickly we can
+// catch up if someone connects.
+#define SSE_MAX_QUEUED_MESSAGES 16
+#include <ESPAsyncWebServer.h>
 #include <EasyButton.h>
 #include <RingBuf.h>
 #include <TFT_eSPI.h>
@@ -39,7 +43,11 @@ IPAddress subnet(255, 255, 255, 0);
 DNSServer dnsServer;
 AsyncWebServer webServer(80);
 AsyncEventSource events("/events");
-std::vector<AsyncEventSourceClient *> clients;
+struct client_t {
+    AsyncEventSourceClient *client;
+    uint32_t last_id;
+};
+std::vector<client_t *> clients;
 
 hw_timer_t *timer = NULL;
 Adafruit_BMP085 bmp;
@@ -58,10 +66,11 @@ float max_z_accel = NAN;
 float prev_max_z_accel = NAN;
 float prev_battery_voltage = NAN;
 float prev_temperature = NAN;
-uint64_t event_id = 0;
+uint32_t event_id = 0;
 uint32_t loop_counter = 0;
 volatile bool backlight_on = true;  // it is on by default
 bool backlight_requested = true;
+bool send_parameters = false;
 
 void handle_root(AsyncWebServerRequest *request);
 void handle_chartjs(AsyncWebServerRequest *request);
@@ -70,6 +79,7 @@ void handle_not_found(AsyncWebServerRequest *request);
 void handle_start(AsyncWebServerRequest *request);
 void handle_stop(AsyncWebServerRequest *request);
 void handle_calibrate(AsyncWebServerRequest *request);
+void handle_parameter(AsyncWebServerRequest *request);
 void init_sensors();
 void do_telemetry();
 void do_idle();
@@ -78,13 +88,52 @@ void draw_grid();
 void draw_button_labels();
 void draw_telemetry();
 float calc_battery_voltage();
+void send_parameters_event();
 
 void button1_ISR() { button1.read(); }
 void button2_ISR() { button2.read(); }
 
-void setup() {
-    Serial.begin(115200);
+struct message_t {
+    uint32_t event_id;
+    char *message;
+    char *event;
+};
 
+RingBuf<message_t, 4096> message_queue;
+
+String empty_weight = "0.0";
+String water_weight = "0.0";
+String air_pressure = "0.0";
+
+enum accel_range_t {
+    ACCEL_RANGE_2G = 2,
+    ACCEL_RANGE_4G = 4,
+    ACCEL_RANGE_8G = 8,
+    ACCEL_RANGE_16G = 16,
+};
+accel_range_t accelerometer_range = ACCEL_RANGE_8G;
+enum gyro_range_t {
+    GYRO_RANGE_250 = 250,
+    GYRO_RANGE_500 = 500,
+    GYRO_RANGE_1000 = 1000,
+    GYRO_RANGE_2000 = 2000,
+};
+gyro_range_t gyroscope_range = GYRO_RANGE_500;
+enum filter_bandwidth_t {
+    FILTER_BANDWIDTH_260 = 260,
+    FILTER_BANDWIDTH_184 = 184,
+    FILTER_BANDWIDTH_94 = 94,
+    FILTER_BANDWIDTH_44 = 44,
+    FILTER_BANDWIDTH_21 = 21,
+    FILTER_BANDWIDTH_10 = 10,
+    FILTER_BANDWIDTH_5 = 5,
+};
+filter_bandwidth_t filter_bandwidth = FILTER_BANDWIDTH_21;
+
+void setup() {
+    message_queue.clear();
+    Serial.begin(115200);
+    Serial.println("DEBUG: Starting up");
     button1.begin();
     button2.begin();
     if (!button1.supportsInterrupt()) {
@@ -108,7 +157,10 @@ void setup() {
         Serial.println("Button 2 pressed");
         backlight_requested = !backlight_requested;
     });
+
+    Serial.println("DEBUG: Initializing TFT");
     tft.begin();
+    Serial.println("DEBUG: Initializing TFT done");
     tft.setRotation(1);
     tft.fillScreen(TFT_BLACK);
     tft.setTextColor(TFT_WHITE);
@@ -117,8 +169,10 @@ void setup() {
     draw_grid();
     draw_button_labels();
 
+    Serial.println("DEBUG: Initializing Sensors");
     init_sensors();
 
+    Serial.println("DEBUG: Initializing WiFi");
     Serial.println("");
     WiFi.softAP(ssid, password);
     WiFi.softAPConfig(local_ip, gateway, subnet);
@@ -133,6 +187,7 @@ void setup() {
     webServer.on("/start", handle_start);
     webServer.on("/stop", handle_stop);
     webServer.on("/calibrate", handle_calibrate);
+    webServer.on("/parameter", handle_parameter);
     webServer.onNotFound(handle_not_found);
     events.onConnect([](AsyncEventSourceClient *client) {
         if (client->lastId()) {
@@ -140,7 +195,17 @@ void setup() {
                 "Client reconnected! Last message ID that it got is: %u\n",
                 client->lastId());
         }
-        clients.push_back(client);
+        client_t *c = new client_t;
+        c->client = client;
+        // if we're idle, don't catch client up
+        if (!telemetry_running) {
+            c->last_id = event_id;
+        } else {
+            c->last_id = client->lastId();
+        }
+        clients.push_back(c);
+        // but do make sure we spread the parameters
+        send_parameters = true;
     });
     webServer.addHandler(&events);
     webServer.begin();
@@ -169,6 +234,10 @@ void loop() {
         Serial.printf("Zero pressure: %f Pa\n", zero_pressure);
         calibration_requested = false;
     }
+    if (send_parameters) {
+        send_parameters_event();
+        send_parameters = false;
+    }
     if (telemetry_requested) {
         do_telemetry();
     } else {
@@ -176,43 +245,120 @@ void loop() {
     }
 }
 
-void send_event(const char *message, const char *event) {
-    event_id++;
-    // use remove_if to iterate over the clients and
-    // send the data to all of them, removing the ones
-    // that are disconnected
+// Bisect the backlog to find the given event_id. There need to be _some_
+// messages in the backlog.
+uint16_t bisect_backlog(uint32_t event_id) {
+    // Before we start bisecting, we need to check that the event_id is in
+    // the backlog at all. If it's not, just return the index for the
+    // earliest event we do have.
+    if (message_queue[0].event_id > event_id) {
+        return 0;
+    }
+    uint16_t len = message_queue.size();
+    uint16_t start = 0;
+    uint16_t end = len;
+    uint16_t mid = (start + end) / 2;
+    while (start < end) {
+        if (message_queue[mid].event_id == event_id) {
+            return mid;
+        }
+        if (message_queue[mid].event_id < event_id) {
+            start = mid + 1;
+        } else {
+            end = mid;
+        }
+        mid = (start + end) / 2;
+    }
+    // We somehow didn't find the event_id, so lets just return the first
+    // message we have. Could be the client gave a corrupt event_id
+    return 0;
+}
+
+bool catch_client_up(client_t *client) {
+    bool return_value = false;
+    uint16_t backlog_len = message_queue.size();
+    uint16_t backlog_start = bisect_backlog(client->last_id + 1);
+    uint16_t messages_to_send = backlog_len - backlog_start;
+    uint16_t space_in_client_queue =
+        SSE_MAX_QUEUED_MESSAGES - client->client->packetsWaiting();
+    if (messages_to_send <= space_in_client_queue) {
+        return_value = true;
+    } else {
+        messages_to_send = space_in_client_queue;
+    }
+    for (uint16_t i = 0; i < messages_to_send; i++) {
+        message_t message = message_queue[backlog_start + i];
+        client->client->send(message.message, message.event);
+        client->last_id = message.event_id;
+    }
+    return return_value;
+}
+
+void send_event(const char *message_text, const char *event) {
     const char *message_to_send;
-    if (message == NULL) {
+    message_t message;
+
+    event_id++;
+
+    if (message_text == NULL) {
         // Serial.printf("Sending event %s\n", event);
+        // client->send doesn't act right if there's no message
         message_to_send = "";
     } else {
         // Serial.printf("Sending event %s: %s\n", event, message);
-        message_to_send = message;
+        message_to_send = message_text;
     }
-    clients.erase(std::remove_if(clients.begin(), clients.end(),
-                                 [&](AsyncEventSourceClient *client) {
-                                     if (!client->connected() ||
-                                         client->packetsWaiting() >=
-                                             SSE_MAX_QUEUED_MESSAGES) {
-                                         return true;
-                                     }
-                                     client->send(message_to_send, event,
-                                                  event_id);
-                                     return false;
-                                 }),
-                  clients.end());
+    // use remove_if to iterate over the clients and
+    // send the data to all of them, removing the ones
+    // that are disconnected
+    clients.erase(
+        std::remove_if(clients.begin(), clients.end(),
+                       [&](client_t *client) {
+                           if (!client->client->connected() ||
+                               client->client->packetsWaiting() >=
+                                   SSE_MAX_QUEUED_MESSAGES) {
+                               if (client->client->packetsWaiting() >=
+                                   SSE_MAX_QUEUED_MESSAGES) {
+                                   Serial.printf(
+                                       "Client %p has too many messages "
+                                       "queued, disconnecting\n",
+                                       client->client);
+                                   client->client->close();
+                               }
+                               delete client;
+                               return true;
+                           }
+                           // Send the message if the client catches up, or it
+                           // will be behind again...
+                           bool caught_up = true;
+                           if (client->last_id < event_id - 1) {
+                               caught_up = catch_client_up(client);
+                           }
+                           // Catching up could have filled the queue
+                           if (caught_up && client->client->packetsWaiting() <
+                                                SSE_MAX_QUEUED_MESSAGES) {
+                               client->client->send(message_to_send, event,
+                                                    event_id);
+                               client->last_id = event_id;
+                           }
+                           return false;
+                       }),
+        clients.end());
+
+    // This is the only place we add/remove, but we will read elsewhere,
+    // make sure those are in the main loop, like here.
+    if (message_queue.isFull()) {
+        message_t to_delete;
+        message_queue.pop(to_delete);
+        free(to_delete.message);
+        free(to_delete.event);
+    }
+    message_queue.push({event_id, strdup(message_to_send), strdup(event)});
 }
 
 void do_telemetry() {
     if (!telemetry_running) {
         Serial.println("Starting telemetry");
-        telemetry_running = true;
-        assert(timer == NULL);
-        timer = timerBegin(0, 80, true);
-        // like the _stopped event, we don't want any idle events
-        // after the _started event. So we send it here instead of
-        // handle_start.
-        send_event(NULL, "telemetry_started");
         int rotation = tft.getRotation();
         tft.setRotation(7);
         tft.pushImage(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, nyancat_bmp);
@@ -223,6 +369,13 @@ void do_telemetry() {
         max_z_accel = NAN;
         prev_max_altitude = NAN;
         prev_max_z_accel = NAN;
+        telemetry_running = true;
+        assert(timer == NULL);
+        timer = timerBegin(0, 80, true);
+        // like the _stopped event, we don't want any idle events
+        // after the _started event. So we send it here instead of
+        // handle_start.
+        send_event(NULL, "telemetry_started");
     }
     unsigned long read_sensor_start = micros();
     sensors_event_t a, g, temp;
@@ -254,8 +407,9 @@ void do_telemetry() {
     send_event(json_string.c_str(), "telemetry");
     unsigned long send_event_end = micros();
     unsigned long send_event_duration = send_event_end - send_event_start;
-    // Serial.printf("Read sensor: %lu us, make json: %lu us, send event: %lu
-    // us\n", read_sensor_duration, make_json_duration, send_event_duration);
+    // Serial.printf("Read sensor: %lu us, make json: %lu us, send event:
+    // %lu us\n", read_sensor_duration, make_json_duration,
+    // send_event_duration);
 
     // update max_altitude if higher or if max is NAN
     if (isnan(max_altitude) || altitude > max_altitude) {
@@ -311,8 +465,8 @@ void do_idle() {
         if (temperature != prev_temperature ||
             battery_voltage != prev_battery_voltage) {
             // format the string to display
-            sprintf(buf, "Temp:\n%.1f C\n\nBattery:\n%.2f V",
-                    temperature, battery_voltage);
+            sprintf(buf, "Temp:\n%.1f C\n\nBattery:\n%.2f V", temperature,
+                    battery_voltage);
             if (strcmp(buf, prev_buf) != 0) {
                 // only update the screen if the string has changed
                 tft.fillScreen(TFT_BLACK);
@@ -328,6 +482,8 @@ void do_idle() {
             }
         }
     }
+    // Catch clients up since we have the time
+
     delay(100);
 }
 
@@ -355,7 +511,6 @@ void draw_grid() {
 #define GRID_EDGE tft.color565(255, 0, 0)
 #define V_CENTER tft.color565(255, 0, 0)
 #define H_CENTER tft.color565(255, 0, 0)
-
     // draw minor lines first so that the major lines overlap them on the
     // cross-sections
     for (int v = (GRID_STEP / 2) - 1; v < SCREEN_WIDTH; v += GRID_STEP) {
@@ -380,8 +535,8 @@ void draw_grid() {
     // tft.drawFastVLine(0, 0, SCREEN_HEIGHT - 1, GRID_EDGE);
     // tft.drawFastVLine(SCREEN_WIDTH - 1, 0, SCREEN_HEIGHT - 1, GRID_EDGE);
     // tft.drawFastHLine(0, 0, SCREEN_WIDTH - 1, GRID_EDGE);
-    // tft.drawFastHLine(0, SCREEN_HEIGHT - 1, SCREEN_HEIGHT - 1, GRID_EDGE);
-    // center lines
+    // tft.drawFastHLine(0, SCREEN_HEIGHT - 1, SCREEN_HEIGHT - 1,
+    // GRID_EDGE); center lines
     tft.drawFastVLine(SCREEN_WIDTH / 2 - 1, 0, SCREEN_HEIGHT - 1, V_CENTER);
     tft.drawFastHLine(0, SCREEN_HEIGHT / 2 - 1, SCREEN_WIDTH - 1, V_CENTER);
 }
@@ -428,7 +583,6 @@ void handle_start(AsyncWebServerRequest *request) {
         request->send(200, "text/plain", "Telemetry already running");
         return;
     }
-    Serial.println("Starting telemetry");
     telemetry_requested = true;
     request->send(200, "text/plain", "Telemetry started");
 }
@@ -438,7 +592,6 @@ void handle_stop(AsyncWebServerRequest *request) {
         request->send(200, "text/plain", "Telemetry already stopped");
         return;
     }
-    Serial.println("Stopping telemetry");
     telemetry_requested = false;
     request->send(200, "text/plain", "Telemetry stopped");
 }
@@ -454,6 +607,40 @@ void handle_not_found(AsyncWebServerRequest *request) {
     } else {
         request->send(404);
     }
+}
+
+void send_parameters_event() {
+    const int capacity = JSON_OBJECT_SIZE(3);
+    StaticJsonDocument<capacity> json;
+    json["empty_weight"] = empty_weight;
+    json["water_weight"] = water_weight;
+    json["air_pressure"] = air_pressure;
+    String json_string = "";
+    serializeJson(json, json_string);
+
+    send_event(json_string.c_str(), "parameters");
+}
+
+void handle_parameter(AsyncWebServerRequest *request) {
+    if (request->hasParam("empty_weight")) {
+        empty_weight.clear();
+        empty_weight.concat(request->getParam("empty_weight")->value());
+        Serial.print("Empty weight set to ");
+        Serial.println(empty_weight);
+    }
+    if (request->hasParam("water_weight")) {
+        water_weight.clear();
+        water_weight.concat(request->getParam("water_weight")->value());
+        Serial.print("Water weight set to ");
+        Serial.println(water_weight);
+    }
+    if (request->hasParam("air_pressure")) {
+        air_pressure.clear();
+        air_pressure.concat(request->getParam("air_pressure")->value());
+        Serial.print("Air pressure set to ");
+        Serial.println(air_pressure);
+    }
+    send_parameters_event();
 }
 
 void init_sensors() {
