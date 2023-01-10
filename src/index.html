@@ -22,9 +22,9 @@
         .button {
             border: none;
             color: white;
-            padding: 16px 40px;
+            padding: 8px 20px;
             text-decoration: none;
-            font-size: 30px;
+            font-size: 16px;
             margin: 2px;
             cursor: pointer;
         }
@@ -56,13 +56,45 @@
         .button:disabled {
             background-color: #cccccc !important;
         }
+        
+        #graphs_container {
+            display: flex;
+            flex-direction: column;
+            gap: 2em;
+            padding: 0 5%;
+        }
+        
+        @media screen and (min-width: 980px) {
+            #graphs_container {
+                flex-direction: row;
+                flex-wrap: wrap;
+                padding: 0;
+            }
+            #graphs_container>* {
+                flex-basis: 40vw;
+                width: 500;
+            }
+        }
+        
+        @media screen and (min-width: 120px) {
+            #graphs_container>* {
+                flex-basis: 30vw;
+            }
+        }
+        
+        table {
+            /* center tables */
+            margin: 0 auto;
+        }
     </style>
     <script>
         let runs = [];
-        let run_number = 0;
+        let run_number = 0; // we start a run with +1ing this
+        let run_index = -1; // this is always one less than run_number
         const random = (min, max) => Math.random() * (max - min) + min;
         let event_source;
         let telemetry_running = false;
+        let max_altitude_cell;
 
         function update_chart(chart, dataset_number, time, value) {
             chart.data.datasets[dataset_number].data.push({
@@ -178,11 +210,25 @@
             reader.readAsText(file);
         });
     </script>
+    <table>
+        <thead>
+            <tr>
+                <th scope="col">Run</th>
+                <th scope="col">Empty Weight</th>
+                <th scope="col">Water Weight</th>
+                <th scope="col">Air Pressure</th>
+                <th scope="col">Max Altitude</th>
+            </tr>
+        </thead>
+        <tbody id="run_table_body">
+        </tbody>
+    </table>
+
     <div id="graphs_container">
-        <canvas id="graph_pressure" class="graph_canvas"></canvas>
-        <canvas id="graph_accel" class="graph_canvas"></canvas>
-        <canvas id="graph_gyro" class="graph_canvas"></canvas>
-        <canvas id="graph_temperature" class="graph_canvas"></canvas>
+        <div><canvas id="graph_pressure" class="graph_canvas"></canvas></div>
+        <div><canvas id="graph_accel" class="graph_canvas"></canvas></div>
+        <div><canvas id="graph_gyro" class="graph_canvas"></canvas></div>
+        <div><canvas id="graph_temperature" class="graph_canvas"></canvas></div>
     </div>
     <script>
         Chart.defaults.pointRadius = 0;
@@ -323,13 +369,18 @@
 
         function telemetry_started() {
             run_number++;
-            runs[run_number] = {
+            run_index = run_number - 1;
+            runs[run_index] = {
+                run_number: run_number,
                 start_time: Date.now(),
                 data: [],
                 parameters: {
                     empty_weight: document.getElementById("empty_weight").value,
                     water_weight: document.getElementById("water_weight").value,
-                    air_pressure: document.getElementById("air_pressure").value
+                    air_pressure: document.getElementById("air_pressure").value,
+                    accel_range: document.getElementById("accel_range").value,
+                    gyro_range: document.getElementById("gyro_range").value,
+                    filter_bandwidth: document.getElementById("filter_bandwidth").value,
                 }
             };
             telemetry_running = true;
@@ -338,10 +389,21 @@
             document.getElementById("stop_button").disabled = false;
             document.getElementById("save_button").disabled = true;
             document.getElementById("load_button").disabled = true;
-            let bright = bright_qualitative_colors[run_number % bright_qualitative_colors.length];
-            let muted = muted_qualitative_colors[run_number % muted_qualitative_colors.length];
-            let grayscale_bright = grayscale_bright_qualitative_colors[run_number % bright_qualitative_colors.length];
-            let grayscale_muted = grayscale_muted_qualitative_colors[run_number % muted_qualitative_colors.length];
+            let row = document.getElementById("run_table_body").insertRow();
+            let cell = row.insertCell();
+            cell.innerHTML = run_number;
+            cell = row.insertCell();
+            cell.innerHTML = runs[run_index].parameters.empty_weight;
+            cell = row.insertCell();
+            cell.innerHTML = runs[run_index].parameters.water_weight;
+            cell = row.insertCell();
+            cell.innerHTML = runs[run_index].parameters.air_pressure;
+            max_altitude_cell = row.insertCell();
+
+            let bright = bright_qualitative_colors[run_index % bright_qualitative_colors.length];
+            let muted = muted_qualitative_colors[run_index % muted_qualitative_colors.length];
+            let grayscale_bright = grayscale_bright_qualitative_colors[run_index % bright_qualitative_colors.length];
+            let grayscale_muted = grayscale_muted_qualitative_colors[run_index % muted_qualitative_colors.length];
             add_dataset(graph_pressure, `Altitude ${run_number}`, bright, 'y');
             add_dataset(graph_pressure, `Pressure ${run_number}`, grayscale_bright, 'y1');
             add_dataset(graph_temperature, `BMP ${run_number}`, bright);
@@ -371,7 +433,6 @@
             if (!telemetry_running) {
                 telemetry_started();
             }
-            let run_index = run_number - 1;
             var data = JSON.parse(event.data);
             update_chart(graph_accel, run_index * 3, data.time, data.acceleration_x);
             update_chart(graph_accel, run_index * 3 + 1, data.time, data.acceleration_y);
@@ -386,7 +447,11 @@
             all_charts.forEach((chart) => {
                 chart.update();
             });
-            runs[run_number].data.push(data);
+            runs[run_index].data.push(data);
+            if (isNaN(runs[run_index].max_altitude) || runs[run_index].max_altitude < data.altitude) {
+                runs[run_index].max_altitude = data.altitude;
+            }
+            max_altitude_cell.innerHTML = runs[run_index].max_altitude;
         });
         event_source.addEventListener("idle", (event) => {
             // It's less likely that we think we're running when we're not
