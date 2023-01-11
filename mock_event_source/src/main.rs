@@ -235,8 +235,8 @@ async fn events(
         }
     }
 }
-async fn jitter_around(value: &mut f32, plusminus: f32, center: f32) {
-    *value += rand::random::<f32>() * plusminus 
+async fn _jitter_around(value: &mut f32, plusminus: f32, center: f32) {
+    *value = center + rand::random::<f32>() * plusminus 
 }
 
 async fn futz_with_telemetry(telemetry: &mut Telemetry, iterations: u64) {

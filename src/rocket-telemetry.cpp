@@ -105,30 +105,12 @@ String empty_weight = "0.0";
 String water_weight = "0.0";
 String air_pressure = "0.0";
 
-enum accel_range_t {
-    ACCEL_RANGE_2G = 2,
-    ACCEL_RANGE_4G = 4,
-    ACCEL_RANGE_8G = 8,
-    ACCEL_RANGE_16G = 16,
-};
-accel_range_t accelerometer_range = ACCEL_RANGE_8G;
-enum gyro_range_t {
-    GYRO_RANGE_250 = 250,
-    GYRO_RANGE_500 = 500,
-    GYRO_RANGE_1000 = 1000,
-    GYRO_RANGE_2000 = 2000,
-};
-gyro_range_t gyroscope_range = GYRO_RANGE_500;
-enum filter_bandwidth_t {
-    FILTER_BANDWIDTH_260 = 260,
-    FILTER_BANDWIDTH_184 = 184,
-    FILTER_BANDWIDTH_94 = 94,
-    FILTER_BANDWIDTH_44 = 44,
-    FILTER_BANDWIDTH_21 = 21,
-    FILTER_BANDWIDTH_10 = 10,
-    FILTER_BANDWIDTH_5 = 5,
-};
-filter_bandwidth_t filter_bandwidth = FILTER_BANDWIDTH_21;
+mpu6050_accel_range_t accel_range = MPU6050_RANGE_8_G;
+mpu6050_accel_range_t requested_accel_range = MPU6050_RANGE_8_G;
+mpu6050_gyro_range_t gyro_range = MPU6050_RANGE_500_DEG;
+mpu6050_gyro_range_t requested_gyro_range = MPU6050_RANGE_500_DEG;
+mpu6050_bandwidth_t filter_bandwidth = MPU6050_BAND_21_HZ;
+mpu6050_bandwidth_t requested_filter_bandwidth = MPU6050_BAND_21_HZ;
 
 void setup() {
     message_queue.clear();
@@ -482,8 +464,25 @@ void do_idle() {
             }
         }
     }
-    // Catch clients up since we have the time
+    // TODO: Catch clients up since we have the time
 
+    // Set sensor parameters if requested
+    bool send_event = false;
+    if (requested_accel_range != accel_range) {
+        accel_range = requested_accel_range;
+        mpu.setAccelerometerRange(accel_range);
+    }
+    if (requested_gyro_range != gyro_range) {
+        gyro_range = requested_gyro_range;
+        mpu.setGyroRange(gyro_range);
+    }
+    if (requested_filter_bandwidth != filter_bandwidth) {
+        filter_bandwidth = requested_filter_bandwidth;
+        mpu.setFilterBandwidth(filter_bandwidth);
+    }
+    if (send_event) {
+        send_parameters_event();
+    }
     delay(100);
 }
 
@@ -610,11 +609,62 @@ void handle_not_found(AsyncWebServerRequest *request) {
 }
 
 void send_parameters_event() {
-    const int capacity = JSON_OBJECT_SIZE(3);
+    const int capacity = JSON_OBJECT_SIZE(6);
     StaticJsonDocument<capacity> json;
     json["empty_weight"] = empty_weight;
     json["water_weight"] = water_weight;
     json["air_pressure"] = air_pressure;
+    switch (accel_range) {
+        case MPU6050_RANGE_2_G:
+            json["accel_range"] = "2";
+            break;
+        case MPU6050_RANGE_4_G:
+            json["accel_range"] = "4";
+            break;
+        case MPU6050_RANGE_8_G:
+            json["accel_range"] = "8";
+            break;
+        case MPU6050_RANGE_16_G:
+            json["accel_range"] = "16";
+            break;
+    }
+    switch (gyro_range) {
+        case MPU6050_RANGE_250_DEG:
+            json["gyro_range"] = "250";
+            break;
+        case MPU6050_RANGE_500_DEG:
+            json["gyro_range"] = "500";
+            break;
+        case MPU6050_RANGE_1000_DEG:
+            json["gyro_range"] = "1000";
+            break;
+        case MPU6050_RANGE_2000_DEG:
+            json["gyro_range"] = "2000";
+            break;
+    }
+    switch (filter_bandwidth) {
+        case MPU6050_BAND_260_HZ:
+            json["filter_bandwidth"] = "260";
+            break;
+        case MPU6050_BAND_184_HZ:
+            json["filter_bandwidth"] = "184";
+            break;
+        case MPU6050_BAND_94_HZ:
+            json["filter_bandwidth"] = "94";
+            break;
+        case MPU6050_BAND_44_HZ:
+            json["filter_bandwidth"] = "44";
+            break;
+        case MPU6050_BAND_21_HZ:
+            json["filter_bandwidth"] = "21";
+            break;
+        case MPU6050_BAND_10_HZ:
+            json["filter_bandwidth"] = "10";
+            break;
+        case MPU6050_BAND_5_HZ:
+            json["filter_bandwidth"] = "5";
+            break;
+    }
     String json_string = "";
     serializeJson(json, json_string);
 
@@ -622,25 +672,116 @@ void send_parameters_event() {
 }
 
 void handle_parameter(AsyncWebServerRequest *request) {
+    // If we're not idle, don't change parameters, just send the current ones.
+    // Because currently the web interface saves the parameters per run. But a
+    // client can join mid-run, and still needs to know the parameters.
+    if (telemetry_running) {
+        send_parameters_event();
+        return;
+    }
+    // The the weights & pressure are just informational, so we can set them
+    // and send an event immediately.
+    bool send_event = false;
     if (request->hasParam("empty_weight")) {
         empty_weight.clear();
         empty_weight.concat(request->getParam("empty_weight")->value());
         Serial.print("Empty weight set to ");
         Serial.println(empty_weight);
+        send_event = true;
     }
     if (request->hasParam("water_weight")) {
         water_weight.clear();
         water_weight.concat(request->getParam("water_weight")->value());
         Serial.print("Water weight set to ");
         Serial.println(water_weight);
+        send_event = true;
     }
     if (request->hasParam("air_pressure")) {
         air_pressure.clear();
         air_pressure.concat(request->getParam("air_pressure")->value());
         Serial.print("Air pressure set to ");
         Serial.println(air_pressure);
+        send_event = true;
     }
-    send_parameters_event();
+    // Don't try to set parameters in the sensors here, because the main loop
+    // might be in the middle of some wire protocol stuff. Set the requested_
+    // variable, and let the main loop handle it.
+    if (request->hasParam("accel_range")) {
+        int accel_range = request->getParam("accel_range")->value().toInt();
+        switch (accel_range) {
+            case 2:
+                requested_accel_range = MPU6050_RANGE_2_G;
+                break;
+            case 4:
+                requested_accel_range = MPU6050_RANGE_4_G;
+                break;
+            case 8:
+                requested_accel_range = MPU6050_RANGE_8_G;
+                break;
+            case 16:
+                requested_accel_range = MPU6050_RANGE_16_G;
+                break;
+            default:
+                Serial.print("Invalid accel_range: ");
+                Serial.println(accel_range);
+                break;
+        }
+    }
+    if (request->hasParam("gyro_range")) {
+        int gyro_range = request->getParam("gyro_range")->value().toInt();
+        switch (gyro_range) {
+            case 250:
+                requested_gyro_range = MPU6050_RANGE_250_DEG;
+                break;
+            case 500:
+                requested_gyro_range = MPU6050_RANGE_500_DEG;
+                break;
+            case 1000:
+                requested_gyro_range = MPU6050_RANGE_1000_DEG;
+                break;
+            case 2000:
+                requested_gyro_range = MPU6050_RANGE_2000_DEG;
+                break;
+            default:
+                Serial.print("Invalid gyro_range: ");
+                Serial.println(gyro_range);
+                break;
+        }
+    }
+    if (request->hasParam("filter_bandwidth")) {
+        int filter_bandwidth =
+            request->getParam("filter_bandwidth")->value().toInt();
+        switch (filter_bandwidth) {
+            case 260:
+                requested_filter_bandwidth = MPU6050_BAND_260_HZ;
+                break;
+            case 184:
+                requested_filter_bandwidth = MPU6050_BAND_184_HZ;
+                break;
+            case 94:
+                requested_filter_bandwidth = MPU6050_BAND_94_HZ;
+                break;
+            case 44:
+                requested_filter_bandwidth = MPU6050_BAND_44_HZ;
+                break;
+            case 21:
+                requested_filter_bandwidth = MPU6050_BAND_21_HZ;
+                break;
+            case 10:
+                requested_filter_bandwidth = MPU6050_BAND_10_HZ;
+                break;
+            case 5:
+                requested_filter_bandwidth = MPU6050_BAND_5_HZ;
+                break;
+            default:
+                Serial.print("Invalid filter_bandwidth: ");
+                Serial.println(filter_bandwidth);
+                break;
+        }
+    }
+    if (send_event) {
+        send_parameters_event();
+    }
 }
 
 void init_sensors() {
@@ -661,7 +802,7 @@ void init_sensors() {
     } else {
         Serial.println("MPU6050 sensor found");
     }
-    mpu.setAccelerometerRange(MPU6050_RANGE_8_G);
+    mpu.setAccelerometerRange(accel_range);
     Serial.print("Accelerometer range set to: ");
     switch (mpu.getAccelerometerRange()) {
         case MPU6050_RANGE_2_G:
@@ -677,7 +818,7 @@ void init_sensors() {
             Serial.println("+-16G");
             break;
     }
-    mpu.setGyroRange(MPU6050_RANGE_500_DEG);
+    mpu.setGyroRange(gyro_range);
     Serial.print("Gyro range set to: ");
     switch (mpu.getGyroRange()) {
         case MPU6050_RANGE_250_DEG:
@@ -694,7 +835,7 @@ void init_sensors() {
             break;
     }
 
-    mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
+    mpu.setFilterBandwidth(filter_bandwidth);
     Serial.print("Filter bandwidth set to: ");
     switch (mpu.getFilterBandwidth()) {
         case MPU6050_BAND_260_HZ:
