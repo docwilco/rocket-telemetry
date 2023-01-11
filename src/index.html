@@ -57,29 +57,50 @@
             background-color: #cccccc !important;
         }
         
-        #graphs_container {
+        .flex {
             display: flex;
-            flex-direction: column;
-            gap: 2em;
-            padding: 0 5%;
+            flex-direction: row;
+            flex-wrap: wrap;
+            justify-content: center;
         }
         
-        @media screen and (min-width: 980px) {
-            #graphs_container {
-                flex-direction: row;
-                flex-wrap: wrap;
-                padding: 0;
-            }
-            #graphs_container>* {
-                flex-basis: 40vw;
-                width: 500;
+        .flex>div {
+            display: flex;
+        }
+        
+        #graphs_container {
+            padding: 2%;
+            align-items: center;
+        }
+        
+        #graphs_container>div {
+            display: inline-block;
+            width: 95vw;
+            height: 40vh;
+        }
+        
+        @media screen and (min-height: 1600px) {
+            #graphs_container>div {
+                height: 20vh;
             }
         }
         
-        @media screen and (min-width: 120px) {
-            #graphs_container>* {
-                flex-basis: 30vw;
+        @media screen and (orientation: landscape) {
+            @media (min-width: 980px) {
+                #graphs_container {
+                    display: grid;
+                    grid-template-columns: repeat(2, 1fr);
+                }
+                #graphs_container>div {
+                    display: inline-block;
+                    width: 47vw;
+                    height: 40vh;
+                }
             }
+        }
+        
+        label {
+            padding: 4px;
         }
         
         table {
@@ -150,45 +171,54 @@
 
 <body>
     <h1>Live Telemetry</h1>
-    <button class="button" id="calibrate_button" onclick="fetch('/calibrate')">Calibrate</button>
-    <button class="button" id="start_button" onclick="fetch('/start')">Start</button>
-    <button class="button" id="stop_button" onclick="fetch('/stop')" disabled>Stop</button>
-    <button class="button" id="save_button" onclick="save_telemetry()">Save...</button>
-    <button class="button" id="load_button" onclick="document.getElementById('file_load').click();">Load...</button>
-
-    <input id="file_load" type="file" style="display: none;" />
+    <div class="flex">
+        <div>
+            <label for="empty_weight">Empty Weight:</label>
+            <input type="text" id="empty_weight" placeholder="Empty Weight" onchange="update_parameters()" />
+        </div>
+        <div>
+            <label for="water_weight">Water Weight:</label>
+            <input type="text" id="water_weight" placeholder="Water Weight" onchange="update_parameters()" />
+        </div>
+        <div>
+            <label for="air_pressure">Air Pressure:</label>
+            <input type="text" id="air_pressure" placeholder="Air Pressure" onchange="update_parameters()" />
+        </div>
+    </div>
     <br>
-    <label for="empty_weight">Empty Weight:</label>
-    <input type="text" id="empty_weight" placeholder="Empty Weight" onchange="update_parameters()" />
-    <label for="water_weight">Water Weight:</label>
-    <input type="text" id="water_weight" placeholder="Water Weight" onchange="update_parameters()" />
-    <label for="air_pressure">Air Pressure:</label>
-    <input type="text" id="air_pressure" placeholder="Air Pressure" onchange="update_parameters()" />
+    <div class="flex">
+        <div>
+            <label for="accel_range">Accelerometer Range (+-G):</label>
+            <select id="accel_range" onchange="update_parameters()">
+                <option value="2">2</option>
+                <option value="4">4</option>
+                <option value="8">8</option>
+                <option value="16">16</option>
+            </select>
+        </div>
+        <div>
+            <label for="gyro_range">Gyroscope Range (+-deg/s):</label>
+            <select id="gyro_range" onchange="update_parameters()">
+                <option value="250">250</option>
+                <option value="500">500</option>
+                <option value="1000">1000</option>
+                <option value="2000">2000</option>
+            </select>
+        </div>
+        <div>
+            <label for="filter_bandwidth">Filter Bandwidth (Hz):</label>
+            <select id="filter_bandwidth" onchange="update_parameters()">
+                <option value="260">260</option>
+                <option value="184">184</option>
+                <option value="94">94</option>
+                <option value="44">44</option>
+                <option value="21">21</option>
+                <option value="10">10</option>
+                <option value="5">5</option>
+            </select>
+        </div>
+    </div>
     <br>
-    <label for="accel_range">Accelerometer Range (+-G):</label>
-    <select id="accel_range" onchange="update_parameters()">
-        <option value="2">2</option>
-        <option value="4">4</option>
-        <option value="8">8</option>
-        <option value="16">16</option>
-    </select>
-    <label for="gyro_range">Gyroscope Range (+-deg/s):</label>
-    <select id="gyro_range" onchange="update_parameters()">
-        <option value="250">250</option>
-        <option value="500">500</option>
-        <option value="1000">1000</option>
-        <option value="2000">2000</option>
-    </select>
-    <label for="filter_bandwidth">Filter Bandwidth (Hz):</label>
-    <select id="filter_bandwidth" onchange="update_parameters()">
-        <option value="260">260</option>
-        <option value="184">184</option>
-        <option value="94">94</option>
-        <option value="44">44</option>
-        <option value="21">21</option>
-        <option value="10">10</option>
-        <option value="5">5</option>
-    </select>
     <table>
         <thead>
             <tr>
@@ -202,6 +232,21 @@
         <tbody id="run_table_body">
         </tbody>
     </table>
+    <div class="flex">
+        <div>
+            <button class="button" id="calibrate_button" onclick="fetch('/calibrate')">Calibrate</button>
+        </div>
+        <div>
+            <button class="button" id="start_button" onclick="fetch('/start')">Start</button>
+            <button class="button" id="stop_button" onclick="fetch('/stop')" disabled>Stop</button>
+        </div>
+        <div>
+            <button class="button" id="save_button" onclick="save_telemetry()">Save...</button>
+            <button class="button" id="load_button" onclick="document.getElementById('file_load').click();">Load...</button>
+        </div>
+    </div>
+    <input id="file_load" type="file" style="display: none;" />
+    <br>
 
     <div id="graphs_container">
         <div><canvas id="graph_pressure" class="graph_canvas"></canvas></div>
@@ -210,8 +255,6 @@
         <div><canvas id="graph_temperature" class="graph_canvas"></canvas></div>
     </div>
     <script>
-        Chart.defaults.pointRadius = 0;
-
         // from https://personal.sron.nl/~pault/
         const bright_qualitative_colors = [
             '#4477AA', '#EE6677', '#228833', '#CCBB44', '#66CCEE', '#AA3377', '#BBBBBB'
@@ -235,72 +278,30 @@
         const grayscale_bright_qualitative_colors = bright_qualitative_colors.map(grayscale);
         const grayscale_muted_qualitative_colors = muted_qualitative_colors.map(grayscale);
         const all_charts = [];
-        const graph_accel = new Chart(document.getElementById('graph_accel'), {
-            type: 'line',
-            options: {
-                animation: false,
-                plugins: {
-                    title: {
-                        display: true,
-                        text: 'Acceleration'
-                    }
-                },
-                scales: {
-                    x: {
-                        type: "linear",
-                        parsing: false,
-                        display: true,
-                    }
-                }
-            }
-        });
-        all_charts.push(graph_accel);
-        const graph_gyro = new Chart(document.getElementById('graph_gyro'), {
-            type: 'line',
-            options: {
-                animation: false,
-                plugins: {
-                    title: {
-                        display: true,
-                        text: 'Gyroscope'
-                    }
-                },
-                scales: {
-                    x: {
-                        type: "linear",
-                        parsing: false,
-                        display: true,
-                    }
-                }
-            }
-        });
-        all_charts.push(graph_gyro);
+        Chart.defaults.pointRadius = 0;
+        Chart.defaults.animation = false;
+        Chart.defaults.responsive = true;
+        Chart.defaults.maintainAspectRatio = false;
+        Chart.defaults.plugins.title.display = true;
+        Chart.defaults.scales.linear.display = true;
+        Chart.defaults.scales.linear.parsing = false;
         const graph_pressure = new Chart(document.getElementById('graph_pressure'), {
             type: 'line',
             options: {
-                animation: false,
                 plugins: {
                     title: {
-                        display: true,
                         text: 'Air Pressure'
                     }
                 },
                 scales: {
                     x: {
                         type: "linear",
-                        parsing: false,
-                        display: true,
                     },
                     y: {
-                        type: "linear",
-                        parsing: false,
-                        display: true,
                         position: "left"
                     },
                     y1: {
                         type: "linear",
-                        parsing: false,
-                        display: true,
                         position: "right",
                         grid: {
                             drawOnChartArea: false // only want the grid lines for one axis to show up
@@ -310,6 +311,38 @@
             }
         });
         all_charts.push(graph_pressure);
+        const graph_accel = new Chart(document.getElementById('graph_accel'), {
+            type: 'line',
+            options: {
+                plugins: {
+                    title: {
+                        text: 'Acceleration'
+                    }
+                },
+                scales: {
+                    x: {
+                        type: "linear",
+                    }
+                }
+            }
+        });
+        all_charts.push(graph_accel);
+        const graph_gyro = new Chart(document.getElementById('graph_gyro'), {
+            type: 'line',
+            options: {
+                plugins: {
+                    title: {
+                        text: 'Gyroscope'
+                    }
+                },
+                scales: {
+                    x: {
+                        type: "linear",
+                    }
+                }
+            }
+        });
+        all_charts.push(graph_gyro);
         const graph_temperature = new Chart(document.getElementById('graph_temperature'), {
             type: 'line',
             options: {
@@ -323,8 +356,6 @@
                 scales: {
                     x: {
                         type: "linear",
-                        parsing: false,
-                        display: true,
                     }
                 }
             }
