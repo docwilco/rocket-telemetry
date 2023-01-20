@@ -160,32 +160,32 @@
             let empty_weight = document.getElementById("empty_weight").value;
             if (empty_weight != prev_empty_weight) {
                 prev_empty_weight = empty_weight;
-                fetch(`/parameters?empty_weight=${empty_weight}`);
+                fetch(`parameters?empty_weight=${empty_weight}`);
             }
             let water_weight = document.getElementById("water_weight").value;
             if (water_weight != prev_water_weight) {
                 prev_water_weight = water_weight;
-                fetch(`/parameters?water_weight=${water_weight}`);
+                fetch(`parameters?water_weight=${water_weight}`);
             }
             let air_pressure = document.getElementById("air_pressure").value;
             if (air_pressure != prev_air_pressure) {
                 prev_air_pressure = air_pressure;
-                fetch(`/parameters?air_pressure=${air_pressure}`);
+                fetch(`parameters?air_pressure=${air_pressure}`);
             }
             let accel_range = document.getElementById("accel_range").value;
             if (accel_range != prev_accel_range) {
                 prev_accel_range = accel_range;
-                fetch(`/parameters?accel_range=${accel_range}`);
+                fetch(`parameters?accel_range=${accel_range}`);
             }
             let gyro_range = document.getElementById("gyro_range").value;
             if (gyro_range != prev_gyro_range) {
                 prev_gyro_range = gyro_range;
-                fetch(`/parameters?gyro_range=${gyro_range}`);
+                fetch(`parameters?gyro_range=${gyro_range}`);
             }
             let filter_bandwidth = document.getElementById("filter_bandwidth").value;
             if (filter_bandwidth != prev_filter_bandwidth) {
                 prev_filter_bandwidth = filter_bandwidth;
-                fetch(`/parameters?filter_bandwidth=${filter_bandwidth}`);
+                fetch(`parameters?filter_bandwidth=${filter_bandwidth}`);
             }
         }
     </script>
@@ -283,12 +283,7 @@
             document.getElementById("bypass_button").disabled = !event.target.checked;
         });
 
-        if (!storage.getItem("save_test")) {
-            document.getElementById("test_dialog").showModal();
-            document.getElementById("test_save_button").focus();
-        } else {
-            document.getElementById("start_button").focus();
-        }
+        // opening dialog happens further down, because we want to focus Calibrate if the test isn't needed
     </script>
     <h1>Live Telemetry</h1>
     <div class="flex">
@@ -354,11 +349,11 @@
     </table>
     <div class="flex">
         <div>
-            <button class="button" id="calibrate_button" onclick="fetch('/calibrate')">Calibrate</button>
+            <button class="button" id="calibrate_button" onclick="fetch('calibrate')">Calibrate</button>
         </div>
         <div>
-            <button class="button" id="start_button" onclick="fetch('/start')">Start</button>
-            <button class="button" id="stop_button" onclick="fetch('/stop')" disabled>Stop</button>
+            <button class="button" id="start_button" onclick="fetch('start')">Start</button>
+            <button class="button" id="stop_button" onclick="fetch('stop')" disabled>Stop</button>
         </div>
         <div>
             <button class="button" id="save_button" onclick="save_telemetry()">Save...</button>
@@ -619,7 +614,7 @@
             reader.readAsText(file);
         });
 
-        event_source = new EventSource("/events");
+        event_source = new EventSource("events");
         event_source.addEventListener("telemetry", (event) => {
             // telemetry can already be running when we load this page, 
             // so we need to handle that case.
@@ -678,7 +673,14 @@
         });
         // Poke the server to get the current parameters, they'll come in on
         // the parameters event.
-        fetch("/parameters");
+        fetch("parameters");
+
+        if (!storage.getItem("save_test")) {
+            document.getElementById("test_dialog").showModal();
+            document.getElementById("test_save_button").focus();
+        } else {
+            document.getElementById("calibrate_button").focus();
+        }
     </script>
 </body>
 
