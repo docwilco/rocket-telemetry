@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>About your browser and request</title>
+</head>
+
+<body>
+    <h1>
+        About your browser and request
+    </h1>
+    <div id="output"></div>
+    <script>
+        let output = document.getElementById("output");
+
+        variables = [
+            "navigator.userAgent",
+            "navigator.userAgentData.brands",
+            "navigator.userAgentData.mobile",
+            "navigator.userAgentData.platform",
+            "navigator.userAgentData.getHighEntropyValues(['architecture']).await()",
+            "navigator.userAgentData.getHighEntropyValues(['bitness']).await()",
+            "navigator.userAgentData.getHighEntropyValues(['model']).await()",
+            "navigator.userAgentData.getHighEntropyValues(['platformVersion']).await()",
+            "navigator.userAgentData.getHighEntropyValues(['uaFullVersion']).await()",
+            "navigator.userAgentData.getHighEntropyValues(['fullVersionList']).await()",
+            "navigator.userAgentData.toJSON()",
+            "navigator.connection.downlink",
+            "navigator.connection.downlinkMax",
+            "navigator.connection.effectiveType",
+            "navigator.connection.rtt",
+            "navigator.connection.saveData",
+            "navigator.connection.type",
+            "screen.orientation.type",
+            "screen.orientation.angle",
+            "screen.width",
+            "screen.height",
+            "window.innerWidth",
+            "window.innerHeight",
+            "window.outerWidth",
+            "window.outerHeight",
+            "window.devicePixelRatio",
+            "window.screenX",
+            "window.screenY",
+            "window.screenLeft",
+            "window.screenTop",
+            "window.screen.availWidth",
+            "window.screen.availHeight",
+            "window.screen.availLeft",
+            "window.screen.availTop",
+
+        ];
+
+        variables.forEach(variable => {
+            let div = document.createElement("div");
+            let value;
+            try {
+                value = eval(variable);
+            } catch (e) {
+                value = "<i>undefined</i>";
+            }
+            div.innerHTML = variable + " = " + value;
+            output.appendChild(div);
+        });
+    </script>
+</body>
+
+</html>

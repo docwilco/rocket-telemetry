@@ -22,6 +22,7 @@
         .button {
             border: none;
             color: white;
+            background-color: #2196F3;
             padding: 8px 20px;
             text-decoration: none;
             font-size: 16px;
@@ -39,18 +40,6 @@
         
         #stop_button {
             background-color: #f44336;
-        }
-        
-        #save_button {
-            background-color: #2196F3;
-        }
-        
-        #load_button {
-            background-color: #2196F3;
-        }
-        
-        #calibrate_button {
-            background-color: #2196F3;
         }
         
         .button:disabled {
@@ -107,12 +96,47 @@
             /* center tables */
             margin: 0 auto;
         }
+        
+        dialog {
+            width: 90vw;
+        }
+        
+        @media screen and (min-width: 980px) {
+            dialog {
+                width: 60vw;
+            }
+        }
+        
+        .test_result_icon {
+            margin-top: auto;
+            margin-bottom: auto;
+        }
     </style>
     <script>
+        let storage = window.localStorage;
+
+        const random = (min, max) => Math.random() * (max - min) + min;
+        const utf8_to_b64 = str => window.btoa(unescape(encodeURIComponent(str)));
+        const b64_to_utf8 = str => decodeURIComponent(escape(window.atob(str)));
+
+        const checkmark_svg =
+            `<svg width="30px" height="30px" viewBox="0 0 170 170">
+                <g>
+                    <path style="fill:#45c845;stroke:none"
+                    d="M 25,95 65,135 150,50 130,30 65,95 l -20,-20 z m 145,-10 a 85,85 0 0 1 -85,85 85,85 0 0 1 -85,-85 85,85 0 0 1 85,-85 85,85 0 0 1 85,85 z" />
+                </g>
+            </svg>`;
+        const cross_svg =
+            `<svg width="30px" height="30px" viewBox="0 0 100 100">
+                <g>
+                    <path style="fill:#da2323;stroke:none"
+                    d="M 21,0 0,21 29,50 0,79 21,100 50,71 79,100 100,79 71,50 100,21 79,0 50,29 Z" />
+                </g>
+            </svg>`;
+
         let runs = [];
         let current_run_number = 0; // we start a run with +1ing this
         let current_run_index = -1; // this is always one less than current_run_number
-        const random = (min, max) => Math.random() * (max - min) + min;
         let event_source;
         let telemetry_running = false;
         let max_altitude_cell;
@@ -170,6 +194,102 @@
 </head>
 
 <body>
+    <dialog id="test_dialog">
+        <h1>Save tester</h1>
+        <p>Because on some platforms (mainly Android), saving the data to a file is not possible when you use the Captive Portal Login browser, this dialog will pop up to test that funcionality once.</p>
+        <p>If you are on Android and there is a ... menu in the top right corner of your screen, with the option "Use this network as is", click that option now, and go to your browser of choice. You can then go to the URL you see above, or something like
+            <a id="neverssl_link" href="http://neverssl.com">neverssl.com</a> and do this test there. Don't worry, you'll only have to do it once.</p>
+        <p>Step 1: If you're ready to do the test, click the "Save" button below. It will download a file called "rocket-telemetry-test-file.txt".</p>
+        <div class="flex">
+            <button class="button" id="test_save_button" onclick="test_save()">Save</button>
+            <div id="test_save_result" class="test_result_icon"></div>
+            </svg>
+        </div>
+        <div id="step2" style="display: none;">
+            <p>Step 2: Once you have downloaded the file, click the "Load" button below. It will open a file selector. Select the file you just downloaded, and click "Open".</p>
+            <div class="flex">
+                <button class="button" id="test_load_button" onclick="test_load()" disabled>Load</button>
+                <div id="test_load_result" class="test_result_icon"></div>
+                </svg>
+            </div>
+        </div>
+        <input id="test_file_load" type="file" style="display: none;" />
+        <p id="test_result"></p>
+    </dialog>
+    <dialog id="bypass_dialog">
+        <h1>Test bypass</h1>
+        <div>
+            <input type="checkbox" id="bypass_checkbox" />
+            <label for="bypass_checkbox">I understand that by bypassing this test I will not be able to save any data that I collect</label>
+        </div>
+        <div>
+            <button class="button" id="bypass_button" onclick="bypass_test()" disabled>Bypass</button>
+        </div>
+    </dialog>
+    <script>
+        let test_secret = utf8_to_b64(`Just a test with some "secret" data. ${Date.now()}`);
+
+        function test_save() {
+            let blob = new Blob([test_secret], {
+                type: "text/plain;charset=utf-8"
+            });
+            saveAs(blob, `rocket-telemetry-test-file.txt`);
+            let test_load_button = document.getElementById("test_load_button");
+            test_load_button.disabled = false;
+            document.getElementById("test_save_result").innerHTML = checkmark_svg;
+            document.getElementById("step2").style.display = "block";
+            test_load_button.focus();
+        }
+
+        function test_load() {
+            document.getElementById("test_file_load").click();
+        }
+
+        document.getElementById("test_file_load").addEventListener("change", (event) => {
+            var file = event.target.files[0];
+            var reader = new FileReader();
+            reader.onload = (event) => {
+                let test_result = document.getElementById("test_result");
+                if (event.target.result == test_secret) {
+                    storage.setItem("save_test", "passed");
+                    document.getElementById("test_load_result").innerHTML = checkmark_svg;
+                    test_result.innerHTML = "The file you selected is the one you downloaded. You can now use the app!";
+                    setTimeout(() => {
+                        let test_dialog = document.getElementById("test_dialog");
+                        test_dialog.close();
+                    }, 2000);
+                } else {
+                    document.getElementById("test_load_result").innerHTML = cross_svg;
+                    test_result.innerHTML = "The file you selected is not the one you downloaded. Please try again.<br>If you are unable to save files, you should try a different browser.";
+                    test_result.innerHTML += "<br>If you can't save files, but you still want to use this app you can <a title='click here to bypass this test' href='#' onclick='open_test_bypass(); return false;'>bypass this test</a>.";
+                }
+            };
+            reader.readAsText(file);
+        });
+
+        function open_test_bypass() {
+            document.getElementById("test_dialog").close();
+            document.getElementById("bypass_dialog").showModal();
+        }
+
+        function bypass_test() {
+            // Since it's just the modal dialogs preventing the user from using the app, we can just close them.
+            // We don't make the bypass permanent, because it would be easy to forget about it and then need to save data later.
+            document.getElementById("bypass_dialog").close();
+            document.getElementById("calibrate_button").focus();
+        }
+
+        document.getElementById("bypass_checkbox").addEventListener("change", (event) => {
+            document.getElementById("bypass_button").disabled = !event.target.checked;
+        });
+
+        if (!storage.getItem("save_test")) {
+            document.getElementById("test_dialog").showModal();
+            document.getElementById("test_save_button").focus();
+        } else {
+            document.getElementById("start_button").focus();
+        }
+    </script>
     <h1>Live Telemetry</h1>
     <div class="flex">
         <div>
@@ -455,6 +575,7 @@
             document.getElementById("stop_button").disabled = false;
             document.getElementById("save_button").disabled = true;
             document.getElementById("load_button").disabled = true;
+            document.getElementById("stop_button").focus();
 
             add_table_row(runs[current_run_index]);
             add_all_datasets();
@@ -468,6 +589,7 @@
             document.getElementById("stop_button").disabled = true;
             document.getElementById("save_button").disabled = false;
             document.getElementById("load_button").disabled = false;
+            document.getElementById("start_button").focus();
         }
 
         document.getElementById("file_load").addEventListener("change", (event) => {
