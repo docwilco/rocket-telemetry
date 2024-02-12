@@ -99,7 +99,8 @@ struct message_t {
     char *event;
 };
 
-RingBuf<message_t, 4096> message_queue;
+/* Measured to be roughly half the RAM left over */
+RingBuf<message_t, 256> message_queue;
 
 String empty_weight = "0.0";
 String water_weight = "0.0";
@@ -299,8 +300,11 @@ void send_event(const char *message_text, const char *event) {
                            if (!client->client->connected() ||
                                client->client->packetsWaiting() >=
                                    SSE_MAX_QUEUED_MESSAGES) {
-                               if (client->client->packetsWaiting() >=
-                                   SSE_MAX_QUEUED_MESSAGES) {
+                               // If the client isn't connected,
+                               // packetsWaiting() can cause a crash
+                               if (client->client->connected() &&
+                                   client->client->packetsWaiting() >=
+                                       SSE_MAX_QUEUED_MESSAGES) {
                                    Serial.printf(
                                        "Client %p has too many messages "
                                        "queued, disconnecting\n",
